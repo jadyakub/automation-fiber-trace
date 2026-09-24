@@ -1,9 +1,15 @@
 (() => {
   'use strict';
 
-  const DATA_URLS = ['/data/f14-kgu-c029m-1.geojson','/data/f14-kgu-c029m-2.geojson','/data/f14-kgu-c029m-3.geojson','/data/f14-kgu-c029m-4.geojson'];
+  const DATA_URLS = [
+    '/data/f14-kgu-c029m-1.geojson',
+    '/data/f14-kgu-c029m-2.geojson',
+    '/data/f14-kgu-c029m-3.geojson',
+    '/data/f14-kgu-c029m-4.geojson'
+  ];
   const DEFAULT_FDC = 'FDC KGU C029M';
   const SNAP_METERS = 5;
+  const FD_ROUTE_TOLERANCE_METERS = 16;
 
   const state = {
     geojson: null,
@@ -11,12 +17,15 @@
     dps: [],
     fdcs: [],
     joints: [],
+    fds: [],
     graph: new Map(),
     nodeCoords: new Map(),
     defaultFdc: null,
     selectedDp: null,
     activeRoute: null,
     routeLayer: null,
+    routeShadowLayer: null,
+    directionLayer: null,
     mover: null,
     animationId: null,
     playing: false,
@@ -26,18 +35,22 @@
     activeBaseLayer: 'satellite',
     markerLayer: null,
     sourceRouteLayer: null,
+    markerEntries: new Map(),
     markersByName: new Map(),
-    lastPan: 0
+    lastPan: 0,
+    topologyReport: null
   };
 
   const $ = id => document.getElementById(id);
   const ui = {
     searchInput: $('searchInput'), searchResults: $('searchResults'), traceBtn: $('traceBtn'),
     selectedNode: $('selectedNode'), destination: $('destination'), totalDistance: $('totalDistance'),
-    coveredDistance: $('coveredDistance'), balanceDistance: $('balanceDistance'), traceStatus: $('traceStatus'),
-    playBtn: $('playBtn'), playText: $('playText'), playIcon: $('playIcon'), resetBtn: $('resetBtn'),
-    speedControl: $('speedControl'), mapStatus: $('mapStatus'), detailsPanel: $('detailsPanel'),
-    mobileDetailsBtn: $('mobileDetailsBtn'), networkBadge: $('networkBadge')
+    coveredDistance: $('coveredDistance'), balanceDistance: $('balanceDistance'), fdCablePath: $('fdCablePath'),
+    traceStatus: $('traceStatus'), playBtn: $('playBtn'), playText: $('playText'), playIcon: $('playIcon'),
+    resetBtn: $('resetBtn'), speedControl: $('speedControl'), mapStatus: $('mapStatus'), detailsPanel: $('detailsPanel'),
+    mobileDetailsBtn: $('mobileDetailsBtn'), networkBadge: $('networkBadge'), mobileTraceBar: $('mobileTraceBar'),
+    mobileTraceInfo: $('mobileTraceInfo'), mobileTraceNode: $('mobileTraceNode'),
+    mobileTraceDistance: $('mobileTraceDistance'), mobilePlayBtn: $('mobilePlayBtn')
   };
 
   const map = L.map('map', { zoomControl: true, attributionControl: true, preferCanvas: true });
@@ -51,17 +64,20 @@
   state.baseLayers.satellite.addTo(map);
   state.sourceRouteLayer = L.layerGroup().addTo(map);
   state.markerLayer = L.layerGroup().addTo(map);
+  state.directionLayer = L.layerGroup().addTo(map);
 
+  const iconText = { dp: 'D', fdc: 'F', jt: 'J', fd: 'FD' };
   const nodeIcon = type => L.divIcon({
     className: '',
-    html: `<span class="node-marker ${type}"></span>`,
-    iconSize: type === 'fdc' ? [24,24] : [18,18],
-    iconAnchor: type === 'fdc' ? [12,12] : [9,9]
+    html: `<span class="node-marker ${type}" data-label="${iconText[type] || ''}"></span>`,
+    iconSize: type === 'fdc' ? [26,26] : [22,22],
+    iconAnchor: type === 'fdc' ? [13,13] : [11,11]
   });
 
   const moverIcon = L.divIcon({
-    className: '', html: '<div class="trace-mover-wrap"><div class="trace-mover"></div></div>',
-    iconSize: [30,30], iconAnchor: [15,15]
+    className: '',
+    html: '<div class="trace-mover-wrap"><div class="trace-mover"></div></div>',
+    iconSize: [40,40], iconAnchor: [20,20]
   });
 
   function mercatorToLngLat(x, y) {
@@ -79,84 +95,144 @@
   const coordKey = p => `${Number(p[0]).toFixed(3)},${Number(p[1]).toFixed(3)}`;
   const xyDistance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-  function addEdge(a, b, weight) {
+  function addEdge(a, b, weight, meta = {}) {
     const ak = coordKey(a), bk = coordKey(b);
+    if (ak === bk) return;
     state.nodeCoords.set(ak, a); state.nodeCoords.set(bk, b);
     if (!state.graph.has(ak)) state.graph.set(ak, []);
     if (!state.graph.has(bk)) state.graph.set(bk, []);
-    state.graph.get(ak).push({ to: bk, weight });
-    state.graph.get(bk).push({ to: ak, weight });
+    state.graph.get(ak).push({ to: bk, weight, ...meta });
+    state.graph.get(bk).push({ to: ak, weight, ...meta });
+  }
+
+  function labelTypeName(name) {
+    const n = String(name || '').trim();
+    if (/^DP\d/i.test(n)) return 'dp';
+    if (/^FDC\b/i.test(n)) return 'fdc';
+    if (/^(JT|JOINT|CLOSURE)\b/i.test(n)) return 'jt';
+    if (/^FD\d\b/i.test(n)) return 'fd';
+    return null;
   }
 
   function buildTopology(data) {
-    state.graph.clear(); state.nodeCoords.clear();
+    state.graph.clear(); state.nodeCoords.clear(); state.labels = [];
     const endpoints = [];
     const lineFeatures = [];
-    state.labels = [];
 
     data.features.forEach((f, idx) => {
       const g = f.geometry || {};
       const props = f.properties || {};
-      if (g.type === 'LineString') {
-        const pts = g.coordinates.map(c => [Number(c[0]), Number(c[1])]);
-        lineFeatures.push({ idx, pts, props });
-        for (let i = 0; i < pts.length - 1; i++) addEdge(pts[i], pts[i + 1], xyDistance(pts[i], pts[i + 1]));
-        if (pts.length) endpoints.push(pts[0], pts[pts.length - 1]);
-      } else if (g.type === 'Point') {
+      if (g.type === 'Point') {
         const text = String(props?.__style?.text || props.name || '').trim();
-        if (text) state.labels.push({ name: text, xy: [Number(g.coordinates[0]), Number(g.coordinates[1])], props });
+        if (text) state.labels.push({ id: `p${idx}`, name: text, xy: [Number(g.coordinates[0]), Number(g.coordinates[1])], props });
+      } else if (g.type === 'LineString') {
+        const pts = g.coordinates.map(c => [Number(c[0]), Number(c[1])]);
+        const color = String(props?.__style?.strokeColor || '#4d6a87').toUpperCase();
+        lineFeatures.push({ idx, pts, props, color });
+      }
+    });
+
+    state.dps = state.labels.filter(x => labelTypeName(x.name) === 'dp');
+    state.fdcs = state.labels.filter(x => labelTypeName(x.name) === 'fdc');
+    state.joints = state.labels.filter(x => labelTypeName(x.name) === 'jt');
+    state.fds = state.labels.filter(x => labelTypeName(x.name) === 'fd');
+    state.defaultFdc = state.fdcs.find(x => x.name.toUpperCase() === DEFAULT_FDC.toUpperCase()) || state.fdcs[0] || null;
+
+    lineFeatures.forEach(({ idx, pts, color }) => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        addEdge(pts[i], pts[i + 1], xyDistance(pts[i], pts[i + 1]), { color, feature: idx, snap: false });
+      }
+      if (pts.length) {
+        endpoints.push({ xy: pts[0], color, feature: idx });
+        endpoints.push({ xy: pts[pts.length - 1], color, feature: idx });
       }
     });
 
     for (let i = 0; i < endpoints.length; i++) {
       for (let j = i + 1; j < endpoints.length; j++) {
-        const d = xyDistance(endpoints[i], endpoints[j]);
-        if (d > 0 && d <= SNAP_METERS) addEdge(endpoints[i], endpoints[j], d);
+        const a = endpoints[i], b = endpoints[j];
+        const d = xyDistance(a.xy, b.xy);
+        if (!(d > 0 && d <= SNAP_METERS)) continue;
+        const sameColour = a.color === b.color;
+        const namedConnection = connectionLabelNear(a.xy, b.xy, 12);
+        if (sameColour || namedConnection) {
+          addEdge(a.xy, b.xy, d, { color: 'SNAP', feature: null, snap: true });
+        }
       }
     }
 
-    state.dps = state.labels.filter(x => /^DP\d/i.test(x.name));
-    state.fdcs = state.labels.filter(x => /^FDC\b/i.test(x.name));
-    state.joints = state.labels.filter(x => /^(JT|JOINT|CLOSURE)\b/i.test(x.name));
-    state.defaultFdc = state.fdcs.find(x => x.name.toUpperCase() === DEFAULT_FDC.toUpperCase()) || state.fdcs[0] || null;
-
     drawSourceRoutes(lineFeatures);
     drawNodes();
+    state.topologyReport = validateTopology();
+    console.table(state.topologyReport.rows);
+  }
+
+  function connectionLabelNear(a, b, tolerance) {
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    return state.labels.some(label => labelTypeName(label.name) && xyDistance(label.xy, mid) <= tolerance);
   }
 
   function drawSourceRoutes(lines) {
     state.sourceRouteLayer.clearLayers();
     const allLatLngs = [];
-    lines.forEach(({ pts, props }) => {
-      const latlngs = pts.map(p => { const [lng, lat] = toLngLat(p); allLatLngs.push([lat, lng]); return [lat, lng]; });
-      const src = props.__style || {};
-      const color = src.strokeColor || '#4d6a87';
-      L.polyline(latlngs, { color, weight: 2.2, opacity: .36, interactive: false }).addTo(state.sourceRouteLayer);
+    lines.forEach(({ pts, color }) => {
+      const latlngs = pts.map(p => {
+        const [lng, lat] = toLngLat(p);
+        allLatLngs.push([lat, lng]);
+        return [lat, lng];
+      });
+      const displayColor = color === '#FF0000' ? '#ff3b30' : color === '#0000FF' ? '#2563eb' : color;
+      L.polyline(latlngs, { color:'#ffffff', weight:5.2, opacity:.24, interactive:false }).addTo(state.sourceRouteLayer);
+      L.polyline(latlngs, { color:displayColor, weight:3.0, opacity:.88, interactive:false }).addTo(state.sourceRouteLayer);
     });
     if (allLatLngs.length) map.fitBounds(L.latLngBounds(allLatLngs), { padding: [20, 20] });
   }
 
   function classify(label) {
-    if (/^DP\d/i.test(label.name)) return 'dp';
-    if (/^FDC\b/i.test(label.name)) return 'fdc';
-    if (/^(JT|JOINT|CLOSURE)\b/i.test(label.name)) return 'jt';
-    return null;
+    return labelTypeName(label.name);
+  }
+
+  function tooltipClass(type, permanent = false) {
+    if (type === 'fd') return 'fd-label';
+    return permanent && type === 'dp' ? 'node-label dp-selected' : 'node-label';
+  }
+
+  function bindMarkerTooltip(entry, permanent = false) {
+    entry.marker.unbindTooltip();
+    entry.marker.bindTooltip(entry.label.name, {
+      permanent,
+      direction: permanent && entry.type === 'fd' ? 'right' : 'top',
+      offset: permanent && entry.type === 'fd' ? [10,0] : [0,-9],
+      className: tooltipClass(entry.type, permanent),
+      opacity: .98
+    });
+    if (permanent) entry.marker.openTooltip();
   }
 
   function drawNodes() {
-    state.markerLayer.clearLayers(); state.markersByName.clear();
+    state.markerLayer.clearLayers(); state.markerEntries.clear(); state.markersByName.clear();
     state.labels.forEach(label => {
       const type = classify(label);
       if (!type) return;
       const [lng, lat] = toLngLat(label.xy);
       const marker = L.marker([lat, lng], { icon: nodeIcon(type), riseOnHover: true, keyboard: false }).addTo(state.markerLayer);
-      marker.bindTooltip(label.name, { direction: 'top', offset: [0,-8], className: 'node-label', opacity: .95 });
-      if (type === 'dp') marker.on('click', () => selectAndTrace(label.name, true));
+      const entry = { marker, label, type };
+      state.markerEntries.set(label.id, entry);
+      bindMarkerTooltip(entry, false);
+
+      if (type === 'dp') marker.on('click', () => selectAndTrace(label.name, false));
       if (type === 'fdc') marker.on('click', () => {
         ui.destination.textContent = label.name;
         ui.mapStatus.textContent = `FDC: ${label.name}`;
       });
-      state.markersByName.set(label.name.toUpperCase(), marker);
+      if (!state.markersByName.has(label.name.toUpperCase())) state.markersByName.set(label.name.toUpperCase(), marker);
+    });
+  }
+
+  function resetMarkerHighlights() {
+    state.markerEntries.forEach(entry => {
+      bindMarkerTooltip(entry, false);
+      if (entry.marker._icon) entry.marker._icon.querySelector('.node-marker')?.classList.remove('fd-active');
     });
   }
 
@@ -184,16 +260,44 @@
         if (visited.has(edge.to)) continue;
         const nd = cur.d + edge.weight;
         if (nd < (dist.get(edge.to) ?? Infinity)) {
-          dist.set(edge.to, nd); prev.set(edge.to, cur.key); queue.push({ key: edge.to, d: nd });
+          dist.set(edge.to, nd);
+          prev.set(edge.to, { from: cur.key, edge });
+          queue.push({ key: edge.to, d: nd });
         }
       }
     }
     if (!dist.has(endKey)) return null;
-    const keys = [];
+    const keys = [], edges = [];
     let k = endKey;
-    while (k) { keys.push(k); if (k === startKey) break; k = prev.get(k); }
-    keys.reverse();
-    return { keys, distance: dist.get(endKey) };
+    while (k) {
+      keys.push(k);
+      if (k === startKey) break;
+      const p = prev.get(k);
+      if (!p) return null;
+      edges.push(p.edge);
+      k = p.from;
+    }
+    keys.reverse(); edges.reverse();
+    return { keys, edges, distance: dist.get(endKey) };
+  }
+
+  function pointSegmentDistance(p, a, b) {
+    const vx = b[0] - a[0], vy = b[1] - a[1];
+    const wx = p[0] - a[0], wy = p[1] - a[1];
+    const len2 = vx * vx + vy * vy;
+    if (!len2) return xyDistance(p, a);
+    const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / len2));
+    return xyDistance(p, [a[0] + t * vx, a[1] + t * vy]);
+  }
+
+  function distanceToPolyline(p, coords) {
+    let best = Infinity;
+    for (let i = 0; i < coords.length - 1; i++) best = Math.min(best, pointSegmentDistance(p, coords[i], coords[i + 1]));
+    return best;
+  }
+
+  function findFdCablesAlongRoute(coords) {
+    return state.fds.filter(fd => distanceToPolyline(fd.xy, coords) <= FD_ROUTE_TOLERANCE_METERS);
   }
 
   function findRoute(dp, fdc) {
@@ -205,8 +309,98 @@
     if (xyDistance(dp.xy, coords[0]) > .01) coords.unshift(dp.xy);
     if (xyDistance(fdc.xy, coords[coords.length - 1]) > .01) coords.push(fdc.xy);
     const distance = result.distance + s.distance + e.distance;
-    const latlngs = coords.map(p => { const [lng, lat] = toLngLat(p); return L.latLng(lat, lng); });
-    return { coords, latlngs, distance };
+    const latlngs = coords.map(p => {
+      const [lng, lat] = toLngLat(p);
+      return L.latLng(lat, lng);
+    });
+    const fdLabels = findFdCablesAlongRoute(coords);
+    return { coords, latlngs, distance, edges: result.edges, fdLabels };
+  }
+
+  function validateTopology() {
+    if (!state.defaultFdc) return { connected:0, total:state.dps.length, rows:[] };
+    const rows = state.dps
+      .slice()
+      .sort((a,b) => a.name.localeCompare(b.name, undefined, { numeric:true }))
+      .map(dp => {
+        const route = findRoute(dp, state.defaultFdc);
+        return {
+          DP: dp.name,
+          Connected: Boolean(route),
+          'Distance km': route ? Number((route.distance / 1000).toFixed(3)) : null,
+          'FD Cable': route ? [...new Set(route.fdLabels.map(x => x.name))].join(' / ') : ''
+        };
+      });
+    return { connected: rows.filter(r => r.Connected).length, total: rows.length, rows };
+  }
+
+  function bearing(a, b) {
+    const p1 = a.lat * Math.PI / 180, p2 = b.lat * Math.PI / 180;
+    const dl = (b.lng - a.lng) * Math.PI / 180;
+    const y = Math.sin(dl) * Math.cos(p2);
+    const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function routeMetric(latlngs) {
+    const segs = []; let total = 0;
+    for (let i = 0; i < latlngs.length - 1; i++) {
+      const d = map.distance(latlngs[i], latlngs[i + 1]);
+      segs.push(d); total += d;
+    }
+    return { segs, total };
+  }
+
+  function pointAtDistance(latlngs, metric, target) {
+    let acc = 0;
+    for (let i = 0; i < metric.segs.length; i++) {
+      const d = metric.segs[i];
+      if (acc + d >= target || i === metric.segs.length - 1) {
+        const t = d === 0 ? 0 : Math.min(1, Math.max(0, (target - acc) / d));
+        return L.latLng(
+          latlngs[i].lat + (latlngs[i + 1].lat - latlngs[i].lat) * t,
+          latlngs[i].lng + (latlngs[i + 1].lng - latlngs[i].lng) * t
+        );
+      }
+      acc += d;
+    }
+    return latlngs[latlngs.length - 1];
+  }
+
+  function renderDirectionArrows(latlngs) {
+    state.directionLayer.clearLayers();
+    const metric = routeMetric(latlngs);
+    const fractions = metric.total < 500 ? [.28, .58, .82] : [.14, .32, .50, .68, .86];
+    fractions.forEach(frac => {
+      const d = metric.total * frac;
+      const p = pointAtDistance(latlngs, metric, d);
+      const p2 = pointAtDistance(latlngs, metric, Math.min(metric.total, d + Math.max(8, metric.total * .015)));
+      const deg = bearing(p, p2);
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="route-arrow-wrap"><div class="route-arrow" style="transform:rotate(${deg}deg)">➤</div></div>`,
+        iconSize:[22,22], iconAnchor:[11,11]
+      });
+      L.marker(p, { icon, interactive:false, zIndexOffset:1200 }).addTo(state.directionLayer);
+    });
+  }
+
+  function highlightRouteMarkers(route, dp) {
+    resetMarkerHighlights();
+    const dpEntry = [...state.markerEntries.values()].find(e => e.type === 'dp' && e.label.name.toUpperCase() === dp.name.toUpperCase());
+    if (dpEntry) bindMarkerTooltip(dpEntry, true);
+    route.fdLabels.forEach(fd => {
+      const entry = state.markerEntries.get(fd.id);
+      if (!entry) return;
+      bindMarkerTooltip(entry, true);
+      if (entry.marker._icon) entry.marker._icon.querySelector('.node-marker')?.classList.add('fd-active');
+    });
+  }
+
+  function clearActiveRouteLayers() {
+    if (state.routeLayer) { state.routeLayer.remove(); state.routeLayer = null; }
+    if (state.routeShadowLayer) { state.routeShadowLayer.remove(); state.routeShadowLayer = null; }
+    state.directionLayer.clearLayers();
   }
 
   function selectAndTrace(name, openMobilePanel = false) {
@@ -217,63 +411,50 @@
     if (!route) return showError(`No connected route found for ${dp.name}.`);
 
     state.selectedDp = dp; state.activeRoute = route; state.progress = 0;
-    if (state.routeLayer) state.routeLayer.remove();
-    state.routeLayer = L.polyline(route.latlngs, { color:'#ffd800', weight:7, opacity:.98, lineCap:'round', lineJoin:'round' }).addTo(map);
-    state.routeLayer.bringToFront();
+    if (state.mover) { state.mover.remove(); state.mover = null; }
+    clearActiveRouteLayers();
 
-    const marker = state.markersByName.get(dp.name.toUpperCase());
-    if (marker) {
-      marker.unbindTooltip();
-      marker.bindTooltip(dp.name, { permanent:true, direction:'right', offset:[10,0], className:'node-label dp-selected', opacity:1 }).openTooltip();
-    }
+    state.routeShadowLayer = L.polyline(route.latlngs, {
+      color:'#1f2937', weight:11, opacity:.72, lineCap:'round', lineJoin:'round', interactive:false
+    }).addTo(map);
+    state.routeLayer = L.polyline(route.latlngs, {
+      color:'#ffd800', weight:6.5, opacity:1, lineCap:'round', lineJoin:'round', interactive:false
+    }).addTo(map);
+    state.routeShadowLayer.bringToFront(); state.routeLayer.bringToFront();
+    renderDirectionArrows(route.latlngs);
+    highlightRouteMarkers(route, dp);
 
     map.fitBounds(state.routeLayer.getBounds(), { padding:[42,42], maxZoom:18, animate:true });
     updateTraceUI(0);
     ui.traceStatus.textContent = 'Ready'; ui.traceStatus.classList.add('active');
-    ui.mapStatus.textContent = `${dp.name} → ${state.defaultFdc.name} • ${(route.distance/1000).toFixed(3)} km`;
-    ui.playBtn.disabled = false; ui.resetBtn.disabled = false;
+    ui.mapStatus.textContent = `${dp.name} → ${state.defaultFdc.name} • ${(route.distance / 1000).toFixed(3)} km`;
+    ui.playBtn.disabled = false; ui.resetBtn.disabled = false; ui.mobilePlayBtn.disabled = false;
     ui.searchInput.value = dp.name;
+    syncPlayButtons('ready');
     if (openMobilePanel && window.innerWidth <= 760) ui.detailsPanel.classList.add('open');
   }
 
   function showError(msg) {
-    ui.mapStatus.textContent = msg; ui.traceStatus.textContent = 'No route'; ui.traceStatus.classList.remove('active');
+    ui.mapStatus.textContent = msg;
+    ui.traceStatus.textContent = 'No route'; ui.traceStatus.classList.remove('active');
   }
 
-  function formatKm(m) { return `${(Math.max(0,m)/1000).toFixed(3)} km`; }
+  function formatKm(m) {
+    return `${(Math.max(0, m) / 1000).toFixed(3)} km`;
+  }
 
   function updateTraceUI(covered) {
     if (!state.activeRoute || !state.selectedDp) return;
     const total = state.activeRoute.distance;
+    const fdNames = [...new Set(state.activeRoute.fdLabels.map(x => x.name))];
     ui.selectedNode.textContent = state.selectedDp.name;
     ui.destination.textContent = state.defaultFdc?.name || '—';
     ui.totalDistance.textContent = formatKm(total);
     ui.coveredDistance.textContent = formatKm(covered);
     ui.balanceDistance.textContent = formatKm(total - covered);
-  }
-
-  function routeMetric(latlngs) {
-    const segs = []; let total = 0;
-    for (let i=0;i<latlngs.length-1;i++) {
-      const d = map.distance(latlngs[i], latlngs[i+1]); segs.push(d); total += d;
-    }
-    return { segs, total };
-  }
-
-  function pointAtDistance(latlngs, metric, target) {
-    let acc = 0;
-    for (let i=0;i<metric.segs.length;i++) {
-      const d = metric.segs[i];
-      if (acc + d >= target || i === metric.segs.length - 1) {
-        const t = d === 0 ? 0 : Math.min(1, Math.max(0, (target - acc) / d));
-        return L.latLng(
-          latlngs[i].lat + (latlngs[i+1].lat - latlngs[i].lat) * t,
-          latlngs[i].lng + (latlngs[i+1].lng - latlngs[i].lng) * t
-        );
-      }
-      acc += d;
-    }
-    return latlngs[latlngs.length-1];
+    ui.fdCablePath.textContent = fdNames.length ? fdNames.join(' / ') : '—';
+    ui.mobileTraceNode.textContent = `${state.selectedDp.name} → ${state.defaultFdc?.name || 'FDC'}`;
+    ui.mobileTraceDistance.textContent = `${formatKm(covered)} covered • ${formatKm(total - covered)} balance`;
   }
 
   function speedDuration() {
@@ -282,16 +463,30 @@
     return state.speed === 'slow' ? normal * 1.7 : state.speed === 'fast' ? normal * .55 : normal;
   }
 
+  function syncPlayButtons(mode) {
+    if (mode === 'playing') {
+      ui.playText.textContent = 'Pause'; ui.playIcon.textContent = 'Ⅱ'; ui.mobilePlayBtn.textContent = 'Ⅱ';
+    } else if (mode === 'completed') {
+      ui.playText.textContent = 'Replay Trace'; ui.playIcon.textContent = '↻'; ui.mobilePlayBtn.textContent = '↻';
+    } else if (mode === 'paused') {
+      ui.playText.textContent = 'Resume Trace'; ui.playIcon.textContent = '▶'; ui.mobilePlayBtn.textContent = '▶';
+    } else {
+      ui.playText.textContent = 'Play Trace'; ui.playIcon.textContent = '▶'; ui.mobilePlayBtn.textContent = '▶';
+    }
+  }
+
   function playTrace() {
     if (!state.activeRoute) return;
-    if (state.playing) { stopAnimation(false); return; }
+    if (state.playing) { stopAnimation(true); return; }
+
     const latlngs = state.activeRoute.latlngs;
     const metric = routeMetric(latlngs);
     const duration = speedDuration();
     const startProgress = state.progress >= .999 ? 0 : state.progress;
     const startTime = performance.now() - startProgress * duration;
     state.playing = true;
-    ui.playText.textContent = 'Pause'; ui.playIcon.textContent = 'Ⅱ'; ui.traceStatus.textContent = 'Tracing';
+    ui.traceStatus.textContent = 'Tracing';
+    syncPlayButtons('playing');
 
     if (!state.mover) state.mover = L.marker(latlngs[0], { icon:moverIcon, zIndexOffset:2000, interactive:false }).addTo(map);
     let lastUi = 0;
@@ -304,35 +499,37 @@
       const pt = pointAtDistance(latlngs, metric, metric.total * p);
       state.mover.setLatLng(pt);
 
-      if (now - lastUi > 100) {
+      if (now - lastUi > 90) {
         updateTraceUI(actualCovered);
-        ui.mapStatus.textContent = `${state.selectedDp.name} • ${formatKm(actualCovered)} covered • ${formatKm(state.activeRoute.distance-actualCovered)} balance`;
+        ui.mapStatus.textContent = `${state.selectedDp.name} • ${formatKm(actualCovered)} covered • ${formatKm(state.activeRoute.distance - actualCovered)} balance`;
         lastUi = now;
       }
-      if (now - state.lastPan > 350) {
-        map.panTo(pt, { animate:true, duration:.28, easeLinearity:.35 });
+      if (now - state.lastPan > 320) {
+        map.panTo(pt, { animate:true, duration:.25, easeLinearity:.35 });
         state.lastPan = now;
       }
-      if (p < 1) state.animationId = requestAnimationFrame(tick);
-      else {
+      if (p < 1) {
+        state.animationId = requestAnimationFrame(tick);
+      } else {
         state.playing = false;
-        ui.playText.textContent = 'Replay Trace'; ui.playIcon.textContent = '↻'; ui.traceStatus.textContent = 'Completed';
+        ui.traceStatus.textContent = 'Completed';
         updateTraceUI(state.activeRoute.distance);
+        syncPlayButtons('completed');
         ui.mapStatus.textContent = `${state.selectedDp.name} trace completed at ${state.defaultFdc.name}`;
       }
     };
     state.animationId = requestAnimationFrame(tick);
   }
 
-  function stopAnimation(resetButton = true) {
+  function stopAnimation(updateButtons = true) {
     state.playing = false;
     if (state.animationId) cancelAnimationFrame(state.animationId);
     state.animationId = null;
-    if (resetButton) { ui.playText.textContent = state.progress > 0 ? 'Resume Trace' : 'Play Trace'; ui.playIcon.textContent = '▶'; }
+    if (updateButtons && state.activeRoute) syncPlayButtons(state.progress > 0 ? 'paused' : 'ready');
   }
 
   function resetTrace() {
-    stopAnimation(); state.progress = 0;
+    stopAnimation(false); state.progress = 0;
     if (state.mover) { state.mover.remove(); state.mover = null; }
     if (state.activeRoute) {
       updateTraceUI(0);
@@ -340,6 +537,7 @@
       ui.mapStatus.textContent = `${state.selectedDp.name} → ${state.defaultFdc.name} • ${formatKm(state.activeRoute.distance)}`;
     }
     ui.traceStatus.textContent = 'Ready';
+    syncPlayButtons('ready');
   }
 
   function searchItems(query) {
@@ -350,45 +548,64 @@
 
   function renderSearchResults() {
     const items = searchItems(ui.searchInput.value);
-    if (!items.length) { ui.searchResults.classList.add('hidden'); ui.searchResults.innerHTML=''; return; }
-    ui.searchResults.innerHTML = items.map(x => `<button type="button" data-name="${escapeHtml(x.name)}"><span>${escapeHtml(x.name)}</span><small>${/^DP/i.test(x.name)?'DP':'FDC'}</small></button>`).join('');
+    if (!items.length) {
+      ui.searchResults.classList.add('hidden'); ui.searchResults.innerHTML = ''; return;
+    }
+    ui.searchResults.innerHTML = items.map(x =>
+      `<button type="button" data-name="${escapeHtml(x.name)}"><span>${escapeHtml(x.name)}</span><small>${/^DP/i.test(x.name) ? 'DP' : 'FDC'}</small></button>`
+    ).join('');
     ui.searchResults.classList.remove('hidden');
   }
 
-  function escapeHtml(s) { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]));
+  }
 
   function bindUI() {
     ui.searchInput.addEventListener('input', renderSearchResults);
-    ui.searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); traceFromSearch(); } });
+    ui.searchInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); traceFromSearch(); }
+    });
     ui.searchResults.addEventListener('click', e => {
       const btn = e.target.closest('button[data-name]'); if (!btn) return;
-      ui.searchInput.value = btn.dataset.name; ui.searchResults.classList.add('hidden');
-      if (/^DP/i.test(btn.dataset.name)) selectAndTrace(btn.dataset.name, true);
+      ui.searchInput.value = btn.dataset.name;
+      ui.searchResults.classList.add('hidden');
+      if (/^DP/i.test(btn.dataset.name)) selectAndTrace(btn.dataset.name, false);
     });
-    document.addEventListener('click', e => { if (!e.target.closest('.search-box')) ui.searchResults.classList.add('hidden'); });
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.search-box')) ui.searchResults.classList.add('hidden');
+    });
     ui.traceBtn.addEventListener('click', traceFromSearch);
     ui.playBtn.addEventListener('click', playTrace);
+    ui.mobilePlayBtn.addEventListener('click', playTrace);
     ui.resetBtn.addEventListener('click', resetTrace);
+    ui.mobileTraceInfo.addEventListener('click', () => ui.detailsPanel.classList.add('open'));
+
     ui.speedControl.addEventListener('click', e => {
       const btn = e.target.closest('button[data-speed]'); if (!btn) return;
       [...ui.speedControl.querySelectorAll('button')].forEach(x => x.classList.toggle('active', x === btn));
       state.speed = btn.dataset.speed;
       if (state.playing) { stopAnimation(false); playTrace(); }
     });
+
     document.querySelector('.map-layer-toggle').addEventListener('click', e => {
       const btn = e.target.closest('button[data-layer]'); if (!btn) return;
-      const next = btn.dataset.layer; if (next === state.activeBaseLayer) return;
-      map.removeLayer(state.baseLayers[state.activeBaseLayer]); state.baseLayers[next].addTo(map); state.baseLayers[next].bringToBack(); state.activeBaseLayer = next;
+      const next = btn.dataset.layer;
+      if (next === state.activeBaseLayer) return;
+      map.removeLayer(state.baseLayers[state.activeBaseLayer]);
+      state.baseLayers[next].addTo(map); state.baseLayers[next].bringToBack();
+      state.activeBaseLayer = next;
       document.querySelectorAll('.map-layer-toggle button').forEach(x => x.classList.toggle('active', x === btn));
     });
+
     ui.mobileDetailsBtn.addEventListener('click', () => ui.detailsPanel.classList.toggle('open'));
-    ui.detailsPanel.addEventListener('click', e => { if (window.innerWidth <= 760 && e.target === ui.detailsPanel) ui.detailsPanel.classList.toggle('open'); });
   }
 
   function traceFromSearch() {
     const q = ui.searchInput.value.trim().toUpperCase();
     const dp = state.dps.find(x => x.name.toUpperCase() === q) || state.dps.find(x => x.name.toUpperCase().includes(q));
-    if (dp) selectAndTrace(dp.name, true); else showError('Select a DP from search results.');
+    if (dp) selectAndTrace(dp.name, false);
+    else showError('Select a DP from search results.');
   }
 
   async function init() {
@@ -401,8 +618,15 @@
       }));
       state.geojson = { type:'FeatureCollection', features:parts.flatMap(p => p.features || []) };
       buildTopology(state.geojson);
-      ui.networkBadge.innerHTML = '<span class="status-dot"></span>Network Ready';
+
+      const report = state.topologyReport;
+      if (report && report.connected === report.total) {
+        ui.networkBadge.innerHTML = `<span class="status-dot"></span>Topology ${report.connected}/${report.total} Ready`;
+      } else {
+        ui.networkBadge.textContent = `Topology ${report?.connected || 0}/${report?.total || state.dps.length}`;
+      }
       if (state.dps.length) ui.mapStatus.textContent = `${state.dps.length} DP loaded • Tap any DP to trace`;
+
       const demo = state.dps.find(x => x.name.toUpperCase() === 'DP0008') || state.dps[0];
       if (demo) setTimeout(() => selectAndTrace(demo.name, false), 400);
     } catch (err) {
@@ -412,6 +636,8 @@
     }
   }
 
-  if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
   init();
 })();
