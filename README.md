@@ -47,9 +47,18 @@ No build step is required. `netlify.toml` publishes the repository root.
 
 Use the Deploy to Netlify button above, or import this repository from the Netlify dashboard. Production branch: `main`. Build command: leave blank. Publish directory: `.`.
 
+## Registered FDC Routes
+- FDC KGU C029M — 18 DP validated
+- FDC KGU C046M — 21 DP validated
+
+The tracing engine isolates each FDC topology internally, so identical DP names such as DP0001 can coexist across different FDC routes without cross-routing.
+
 ## Data
 Current seed topology:
 
 `data/f14-kgu-c029m-1.geojson` through `data/f14-kgu-c029m-4.geojson`
 
 The app intentionally fetches topology data with `no-store` behavior so future data replacement can refresh without rebuilding application code.
+
+
+C046M source data is stored as `data/f14-kgu-c046m-1.geojson` through `data/f14-kgu-c046m-6.geojson`.
