@@ -441,6 +441,31 @@
     }
   }
 
+  function labelTouchesMainCable(label, tolerance = 22) {
+    for (const network of state.networks.values()) {
+      const redLines = network.lineFeatures.filter(line => line.color === '#FF0000');
+      if (redLines.some(line => distanceToPolyline(label.xy, line.pts) <= tolerance)) return true;
+    }
+    return false;
+  }
+
+  function allMainCableFdcs() {
+    const found = [];
+    const seen = new Set();
+
+    state.networks.forEach(network => {
+      network.fdcs.forEach(label => {
+        if (!labelTouchesMainCable(label)) return;
+        const key = `${label.name.toUpperCase()}|${coordKey(label.xy)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        found.push(label);
+      });
+    });
+
+    return found;
+  }
+
   function markerDedupKey(label, type) {
     return `${type}|${label.name.toUpperCase()}|${coordKey(label.xy)}`;
   }
@@ -475,13 +500,11 @@
     state.markerEntries.clear();
     state.markerDedup.clear();
 
+    // Distribution-side markers obey FDC View.
     visibleNetworkList().forEach(network => {
       network.labels.forEach(label => {
         const type = labelTypeName(label.name);
-        if (!type) return;
-
-        // Only show the target FDC for each registered topology.
-        if (type === 'fdc' && label.name.toUpperCase() !== network.fdcName.toUpperCase()) return;
+        if (!type || type === 'fdc') return;
 
         // Hide JT/FD labels that are not part of the selected FDC topology.
         if ((type === 'jt' || type === 'fd') && !labelTouchesRelevantRoute(network, label)) return;
@@ -503,12 +526,51 @@
 
         if (type === 'dp') {
           marker.on('click', () => selectAndTrace(label, false));
-        } else if (type === 'fdc') {
-          marker.on('click', () => {
-            setFdcView(network.id, { fit:true, clearTrace:true });
-            ui.destination.textContent = label.name;
-            ui.mapStatus.textContent = `FDC Focus: ${label.name}`;
-          });
+        }
+      });
+    });
+
+    // MAIN CABLE FDCs are always visible, regardless of FDC View.
+    allMainCableFdcs().forEach(label => {
+      const type = 'fdc';
+      const dedupKey = markerDedupKey(label, type);
+      if (state.markerDedup.has(dedupKey)) return;
+      state.markerDedup.add(dedupKey);
+
+      const [lng, lat] = toLngLat(label.xy);
+      const marker = L.marker([lat,lng], {
+        icon:nodeIcon(type),
+        riseOnHover:true,
+        keyboard:false,
+        zIndexOffset:900
+      }).addTo(state.markerLayer);
+
+      const registered = [...state.networks.values()].find(network =>
+        network.fdcName.toUpperCase() === label.name.toUpperCase()
+      );
+
+      const entry = { marker, label, type };
+      state.markerEntries.set(label.id, entry);
+
+      marker.bindTooltip(
+        registered ? `${label.name} · Registered` : `${label.name} · Main Cable`,
+        {
+          direction:'top',
+          offset:[0,-10],
+          className:'node-label',
+          opacity:.98
+        }
+      );
+
+      marker.on('click', () => {
+        if (registered) {
+          setFdcView(registered.id, { fit:true, clearTrace:true });
+          ui.destination.textContent = registered.targetFdc?.name || label.name;
+          ui.mapStatus.textContent = `FDC Focus: ${label.name}`;
+        } else {
+          map.setView([lat,lng], Math.max(map.getZoom(), 17), { animate:true });
+          ui.destination.textContent = label.name;
+          ui.mapStatus.textContent = `${label.name} connected to Main Cable • Distribution route not loaded yet`;
         }
       });
     });
@@ -576,7 +638,7 @@
     if (changed || clearTrace) {
       ui.mapStatus.textContent = next === 'ALL'
         ? `All FDC routes visible • ${state.allDps.length} DP`
-        : `${next} focused • Other FDC branches hidden • Main Cable visible`;
+        : `${next} focused • Other FDC branches hidden • Main Cable + connected FDCs visible`;
     }
   }
 
