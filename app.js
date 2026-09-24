@@ -13,6 +13,13 @@
       ]
     },
     {
+      id: 'C045M',
+      fdcName: 'FDC KGU C045M',
+      dataUrls: [
+        '/data/f14-kgu-c045m.geojson'
+      ]
+    },
+    {
       id: 'C046M',
       fdcName: 'FDC KGU C046M',
       dataUrls: [
@@ -56,7 +63,8 @@
     faultMarker: null,
     faultSegmentLayer: null,
     faultGps: null,
-    selectedSearchDp: null
+    selectedSearchDp: null,
+    fdcView: 'ALL'
   };
 
   const $ = id => document.getElementById(id);
@@ -76,7 +84,7 @@
     faultGoogleMapsBtn: $('faultGoogleMapsBtn'),
     mobileSheetClose: $('mobileSheetClose'), mobileDashboardBtn: $('mobileDashboardBtn'),
     mobileFaultBtn: $('mobileFaultBtn'), mobileSheetSubtitle: $('mobileSheetSubtitle'),
-    otdrFaultCard: $('otdrFaultCard')
+    otdrFaultCard: $('otdrFaultCard'), fdcViewSelect: $('fdcViewSelect')
   };
 
   const map = L.map('map', { zoomControl: true, attributionControl: true, preferCanvas: true });
@@ -149,7 +157,9 @@
       nodeCoords: new Map(),
       lineFeatures: [],
       targetFdc: null,
-      report: null
+      report: null,
+      usedFeatures: new Set(),
+      relevantLineFeatures: []
     };
 
     function addEdge(a, b, weight, meta = {}) {
@@ -324,11 +334,18 @@
   }
 
   function validateNetwork(network) {
+    network.usedFeatures.clear();
+
     const rows = network.dps
       .slice()
       .sort((a,b) => a.name.localeCompare(b.name, undefined, { numeric:true }))
       .map(dp => {
         const route = findRoute(dp, network);
+        if (route) {
+          route.edges.forEach(edge => {
+            if (Number.isInteger(edge.feature)) network.usedFeatures.add(edge.feature);
+          });
+        }
         return {
           Network: network.id,
           DP: dp.name,
@@ -338,6 +355,10 @@
         };
       });
 
+    network.relevantLineFeatures = network.lineFeatures.filter(line =>
+      !network.usedFeatures.size || network.usedFeatures.has(line.idx)
+    );
+
     network.report = {
       connected: rows.filter(row => row.Connected).length,
       total: rows.length,
@@ -346,13 +367,23 @@
     return network.report;
   }
 
-  function drawSourceRoutes() {
+  function visibleNetworkList() {
+    if (state.fdcView === 'ALL') return [...state.networks.values()];
+    const network = state.networks.get(state.fdcView);
+    return network ? [network] : [];
+  }
+
+  function drawSourceRoutes({ fit = false } = {}) {
     state.sourceRouteLayer.clearLayers();
     const allLatLngs = [];
     const seen = new Set();
 
-    state.networks.forEach(network => {
-      network.lineFeatures.forEach(({ pts, color }) => {
+    visibleNetworkList().forEach(network => {
+      const routeLines = network.relevantLineFeatures.length
+        ? network.relevantLineFeatures
+        : network.lineFeatures;
+
+      routeLines.forEach(({ pts, color }) => {
         const geometryKey = color + '|' + pts.map(p => coordKey(p)).join(';');
         if (seen.has(geometryKey)) return;
         seen.add(geometryKey);
@@ -369,8 +400,8 @@
       });
     });
 
-    if (allLatLngs.length) {
-      map.fitBounds(L.latLngBounds(allLatLngs), { padding:[20,20] });
+    if (fit && allLatLngs.length) {
+      map.fitBounds(L.latLngBounds(allLatLngs), { padding:[28,28] });
     }
   }
 
@@ -396,15 +427,28 @@
     if (permanent) entry.marker.openTooltip();
   }
 
+  function labelTouchesRelevantRoute(network, label, tolerance = 18) {
+    const lines = network.relevantLineFeatures.length
+      ? network.relevantLineFeatures
+      : network.lineFeatures;
+    return lines.some(line => distanceToPolyline(label.xy, line.pts) <= tolerance);
+  }
+
   function drawNodes() {
     state.markerLayer.clearLayers();
     state.markerEntries.clear();
     state.markerDedup.clear();
 
-    state.networks.forEach(network => {
+    visibleNetworkList().forEach(network => {
       network.labels.forEach(label => {
         const type = labelTypeName(label.name);
         if (!type) return;
+
+        // Only show the target FDC for each registered topology.
+        if (type === 'fdc' && label.name.toUpperCase() !== network.fdcName.toUpperCase()) return;
+
+        // Hide JT/FD labels that are not part of the selected FDC topology.
+        if ((type === 'jt' || type === 'fd') && !labelTouchesRelevantRoute(network, label)) return;
 
         const dedupKey = markerDedupKey(label, type);
         if (state.markerDedup.has(dedupKey) && type !== 'dp') return;
@@ -425,12 +469,79 @@
           marker.on('click', () => selectAndTrace(label, false));
         } else if (type === 'fdc') {
           marker.on('click', () => {
+            setFdcView(network.id, { fit:true, clearTrace:true });
             ui.destination.textContent = label.name;
-            ui.mapStatus.textContent = `FDC: ${label.name}`;
+            ui.mapStatus.textContent = `FDC Focus: ${label.name}`;
           });
         }
       });
     });
+  }
+
+  function populateFdcView() {
+    ui.fdcViewSelect.innerHTML =
+      '<option value="ALL">All FDC</option>' +
+      NETWORK_CONFIGS.map(config =>
+        `<option value="${escapeHtml(config.id)}">${escapeHtml(config.id)}</option>`
+      ).join('');
+    ui.fdcViewSelect.value = state.fdcView;
+  }
+
+  function clearTraceSelectionForView() {
+    stopAnimation(false);
+    clearFaultLocator(false);
+    clearActiveRouteLayers();
+
+    if (state.mover) {
+      state.mover.remove();
+      state.mover = null;
+    }
+
+    state.selectedDp = null;
+    state.selectedSearchDp = null;
+    state.activeNetwork = null;
+    state.activeRoute = null;
+    state.progress = 0;
+
+    ui.selectedNode.textContent = '—';
+    ui.totalDistance.textContent = '—';
+    ui.coveredDistance.textContent = '—';
+    ui.balanceDistance.textContent = '—';
+    ui.fdCablePath.textContent = '—';
+    ui.traceStatus.textContent = 'Idle';
+    ui.traceStatus.classList.remove('active');
+    ui.playBtn.disabled = true;
+    ui.resetBtn.disabled = true;
+    ui.mobilePlayBtn.disabled = true;
+    syncPlayButtons('ready');
+
+    const selectedNetwork = state.networks.get(state.fdcView);
+    ui.destination.textContent = selectedNetwork?.targetFdc?.name || '—';
+    ui.mobileTraceNode.textContent = state.fdcView === 'ALL' ? 'All FDC' : `${state.fdcView} Focus`;
+    ui.mobileTraceDistance.textContent = 'Select a DP to trace';
+  }
+
+  function setFdcView(value, { fit = true, clearTrace = false } = {}) {
+    const next = value === 'ALL' || state.networks.has(value) ? value : 'ALL';
+    const changed = state.fdcView !== next;
+    state.fdcView = next;
+    ui.fdcViewSelect.value = next;
+
+    if (clearTrace) clearTraceSelectionForView();
+
+    drawSourceRoutes({ fit });
+    drawNodes();
+
+    if (!clearTrace && state.activeRoute && state.activeNetwork &&
+        (state.fdcView === 'ALL' || state.activeNetwork.id === state.fdcView)) {
+      highlightRouteMarkers(state.activeRoute, state.selectedDp);
+    }
+
+    if (changed || clearTrace) {
+      ui.mapStatus.textContent = next === 'ALL'
+        ? `All FDC routes visible • ${state.allDps.length} DP`
+        : `${next} focused • Other FDC routes hidden`;
+    }
   }
 
   function resetMarkerHighlights() {
@@ -536,6 +647,14 @@
     state.activeNetwork = network;
     state.activeRoute = route;
     state.progress = 0;
+
+    // Auto-focus the selected DP's FDC so other network routes disappear.
+    if (state.fdcView !== network.id) {
+      state.fdcView = network.id;
+      ui.fdcViewSelect.value = network.id;
+      drawSourceRoutes({ fit:false });
+      drawNodes();
+    }
 
     if (state.mover) { state.mover.remove(); state.mover = null; }
     clearActiveRouteLayers();
@@ -924,7 +1043,7 @@
       selectAndTrace(exact[0], false);
     } else if (exact.length > 1) {
       renderSearchResults();
-      showError(`${q} exists in multiple FDC routes. Select the C029M/C046M result.`);
+      showError(`${q} exists in multiple FDC routes. Select the required FDC result.`);
     } else {
       const partial = state.allDps.filter(dp => dp.name.toUpperCase().includes(q));
       if (partial.length === 1) selectAndTrace(partial[0], false);
@@ -963,6 +1082,10 @@
 
       const fdc = state.allFdcs.find(item => item.id === button.dataset.id);
       if (fdc) {
+        const network = state.networks.get(fdc.networkId);
+        if (network?.targetFdc?.id === fdc.id) {
+          setFdcView(network.id, { fit:true, clearTrace:true });
+        }
         const [lng, lat] = toLngLat(fdc.xy);
         map.setView([lat,lng], 18, { animate:true });
         ui.searchInput.value = fdc.name;
@@ -972,6 +1095,10 @@
 
     document.addEventListener('click', event => {
       if (!event.target.closest('.search-box')) ui.searchResults.classList.add('hidden');
+    });
+
+    ui.fdcViewSelect.addEventListener('change', () => {
+      setFdcView(ui.fdcViewSelect.value, { fit:true, clearTrace:true });
     });
 
     ui.traceBtn.addEventListener('click', traceFromSearch);
@@ -1068,7 +1195,8 @@
       state.allFds = networks.flatMap(network => network.fds);
       state.topologyReports = networks.map(network => network.report);
 
-      drawSourceRoutes();
+      populateFdcView();
+      drawSourceRoutes({ fit:true });
       drawNodes();
       populateFaultStarts();
 
@@ -1084,9 +1212,10 @@
       ui.mapStatus.textContent = `${NETWORK_CONFIGS.length} FDC routes • ${total} DP loaded`;
       console.table(state.topologyReports.flatMap(report => report.rows));
 
-      const demoNetwork = state.networks.get('C029M');
-      const demo = demoNetwork?.dps.find(dp => dp.name.toUpperCase() === 'DP0008') || state.allDps[0];
-      if (demo) setTimeout(() => selectAndTrace(demo, false), 400);
+      state.fdcView = 'ALL';
+      ui.fdcViewSelect.value = 'ALL';
+      ui.destination.textContent = '—';
+      ui.mapStatus.textContent = `${NETWORK_CONFIGS.length} FDC routes • ${total} DP loaded • Choose FDC View or select a DP`;
     } catch (error) {
       console.error(error);
       ui.networkBadge.textContent = 'Data Error';
