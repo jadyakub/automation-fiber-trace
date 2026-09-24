@@ -806,3 +806,61 @@ button, input { font: inherit; }
   .mobile-trace-bar { min-height:50px; }
   .mobile-nav { height:56px; }
 }
+
+
+/* ===== FDC route focus control ===== */
+.fdc-focus-control {
+  position:absolute;
+  top:14px;
+  right:14px;
+  z-index:900;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 8px 6px 10px;
+  border-radius:10px;
+  background:rgba(255,255,255,.96);
+  border:1px solid rgba(226,232,240,.95);
+  box-shadow:0 6px 18px rgba(15,23,42,.14);
+  backdrop-filter:blur(8px);
+}
+.fdc-focus-control span {
+  font-size:10px;
+  color:#64748b;
+  font-weight:800;
+  white-space:nowrap;
+}
+.fdc-focus-control select {
+  height:30px;
+  min-width:112px;
+  border:0;
+  outline:0;
+  border-radius:7px;
+  background:#eef6ff;
+  color:#1677ff;
+  padding:0 8px;
+  font-size:11px;
+  font-weight:900;
+  cursor:pointer;
+}
+.fdc-focus-control select:focus {
+  box-shadow:0 0 0 3px rgba(22,119,255,.12);
+}
+
+@media (max-width:760px) {
+  .fdc-focus-control {
+    top:50px;
+    right:8px;
+    gap:5px;
+    padding:4px 5px 4px 7px;
+    border-radius:9px;
+  }
+  .fdc-focus-control span { display:none; }
+  .fdc-focus-control select {
+    height:34px;
+    min-width:96px;
+    max-width:108px;
+    padding:0 6px;
+    font-size:10px;
+  }
+}
