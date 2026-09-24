@@ -396,10 +396,10 @@
       // Main cable is always visible. Distribution routes follow the selected FDC View.
       if (mainCable) {
         L.polyline(latlngs, {
-          color:'#ffffff', weight:6.2, opacity:.26, interactive:false
+          color:'#ffffff', weight:7.2, opacity:.38, interactive:false
         }).addTo(state.sourceRouteLayer);
         L.polyline(latlngs, {
-          color:'#ff3b30', weight:3.6, opacity:.94, interactive:false
+          color:'#ff2d2d', weight:4.6, opacity:1, interactive:false
         }).addTo(state.sourceRouteLayer);
       } else {
         const displayColor = color === '#0000FF' ? '#2563eb' : color;
@@ -412,24 +412,7 @@
       }
     }
 
-    // 1) RED = MAIN CABLE / FEEDER BACKBONE.
-    // Always keep it visible regardless of FDC View.
-    allNetworks.forEach(network => {
-      const lines = network.relevantLineFeatures.length
-        ? network.relevantLineFeatures
-        : network.lineFeatures;
-
-      lines
-        .filter(line => line.color === '#FF0000')
-        .forEach(line => {
-          const includeInFit =
-            state.fdcView === 'ALL' ||
-            network.id === state.fdcView;
-          drawLine(line, { mainCable:true, includeInFit });
-        });
-    });
-
-    // 2) BLUE = FDC distribution / branch routes.
+    // 1) BLUE = FDC distribution / branch routes.
     // Only show branches belonging to the selected FDC, or all branches in ALL mode.
     focusedNetworks.forEach(network => {
       const lines = network.relevantLineFeatures.length
@@ -439,6 +422,18 @@
       lines
         .filter(line => line.color !== '#FF0000')
         .forEach(line => drawLine(line, { mainCable:false, includeInFit:true }));
+    });
+
+    // 2) RED = MAIN CABLE / FEEDER BACKBONE.
+    // IMPORTANT: use ALL original red features, never shortest-path filtered features.
+    // Draw after blue so the main cable remains visible where geometries overlap.
+    allNetworks.forEach(network => {
+      network.lineFeatures
+        .filter(line => line.color === '#FF0000')
+        .forEach(line => {
+          const includeInFit = state.fdcView === 'ALL';
+          drawLine(line, { mainCable:true, includeInFit });
+        });
     });
 
     if (fit && fitLatLngs.length) {
