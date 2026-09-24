@@ -2,6 +2,8 @@
 
 Mobile-first fiber topology tracing web app for DP → FDC route visualization and playback.
 
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/jadyakub/automation-fiber-trace)
+
 ## V1 Features
 - Load fiber topology from GeoJSON
 - Auto-detect DP / FDC / Joint labels
@@ -36,7 +38,7 @@ Then open `http://localhost:8888`.
 ## Netlify
 No build step is required. `netlify.toml` publishes the repository root.
 
-Connect this repository to Netlify and deploy from the default branch.
+Use the Deploy to Netlify button above, or import this repository from the Netlify dashboard. Production branch: `main`. Build command: leave blank. Publish directory: `.`.
 
 ## Data
 Current seed topology:
