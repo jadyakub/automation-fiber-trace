@@ -76,7 +76,14 @@
           </div>
 
           <aside class="details-panel" id="detailsPanel">
-            <section class="info-card">
+            <div class="mobile-sheet-head">
+              <div>
+                <strong>Fiber Trace</strong>
+                <span id="mobileSheetSubtitle">Trace details & OTDR tools</span>
+              </div>
+              <button id="mobileSheetClose" type="button" aria-label="Close details">×</button>
+            </div>
+            <section class="info-card trace-detail-card">
               <div class="card-title-row">
                 <h2>Trace Details</h2>
                 <span id="traceStatus" class="mini-status">Idle</span>
@@ -164,8 +171,8 @@
     </div>
 
     <nav class="mobile-nav">
-      <button class="active"><span>⌂</span><small>Dashboard</small></button>
-      <button><span>⌁</span><small>Fiber Trace</small></button>
+      <button id="mobileDashboardBtn" class="active"><span>⌂</span><small>Map</small></button>
+      <button id="mobileFaultBtn"><span>⚡</span><small>OTDR Fault</small></button>
       <button id="mobileDetailsBtn"><span>☷</span><small>Details</small></button>
     </nav>
   </div>
