@@ -58,7 +58,10 @@
     faultDistanceInput: $('faultDistanceInput'), locateFaultBtn: $('locateFaultBtn'),
     faultStatus: $('faultStatus'), faultResult: $('faultResult'), faultGps: $('faultGps'),
     faultFromStart: $('faultFromStart'), faultBalance: $('faultBalance'),
-    faultGoogleMapsBtn: $('faultGoogleMapsBtn')
+    faultGoogleMapsBtn: $('faultGoogleMapsBtn'),
+    mobileSheetClose: $('mobileSheetClose'), mobileDashboardBtn: $('mobileDashboardBtn'),
+    mobileFaultBtn: $('mobileFaultBtn'), mobileSheetSubtitle: $('mobileSheetSubtitle'),
+    otdrFaultCard: $('otdrFaultCard')
   };
 
   const map = L.map('map', { zoomControl: true, attributionControl: true, preferCanvas: true });
@@ -515,7 +518,11 @@
     ui.mapStatus.textContent = `Suspected cut • ${Math.round(distanceM)} m from ${start.name} • GPS ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
 
     map.setView(point, Math.max(map.getZoom(), 18), { animate:true });
-    if (window.innerWidth <= 760) ui.detailsPanel.classList.remove('open');
+    if (window.innerWidth <= 760) {
+      ui.mobileTraceNode.textContent = `⚡ Suspected Cut • ${start.name}`;
+      ui.mobileTraceDistance.textContent = `${Math.round(distanceM)} m • ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+      closeMobileSheet();
+    }
   }
 
   function selectAndTrace(name, openMobilePanel = false) {
@@ -548,6 +555,10 @@
     ui.searchInput.value = dp.name;
     syncFaultStart(dp.name);
     syncPlayButtons('ready');
+    if (window.innerWidth <= 760 && !openMobilePanel) {
+      ui.detailsPanel.classList.remove('open');
+      setMobileNavActive(ui.mobileDashboardBtn);
+    }
     if (openMobilePanel && window.innerWidth <= 760) ui.detailsPanel.classList.add('open');
   }
 
@@ -696,7 +707,7 @@
     ui.playBtn.addEventListener('click', playTrace);
     ui.mobilePlayBtn.addEventListener('click', playTrace);
     ui.resetBtn.addEventListener('click', resetTrace);
-    ui.mobileTraceInfo.addEventListener('click', () => ui.detailsPanel.classList.add('open'));
+    ui.mobileTraceInfo.addEventListener('click', () => openMobileSheet('details'));
 
     ui.faultStartSelect.addEventListener('change', () => {
       const name = ui.faultStartSelect.value;
@@ -736,7 +747,39 @@
       document.querySelectorAll('.map-layer-toggle button').forEach(x => x.classList.toggle('active', x === btn));
     });
 
-    ui.mobileDetailsBtn.addEventListener('click', () => ui.detailsPanel.classList.toggle('open'));
+    ui.mobileDetailsBtn.addEventListener('click', () => {
+      if (ui.detailsPanel.classList.contains('open') && ui.mobileDetailsBtn.classList.contains('active')) closeMobileSheet();
+      else openMobileSheet('details');
+    });
+    ui.mobileDashboardBtn.addEventListener('click', closeMobileSheet);
+    ui.mobileFaultBtn.addEventListener('click', () => openMobileSheet('fault'));
+    ui.mobileSheetClose.addEventListener('click', closeMobileSheet);
+  }
+
+  function setMobileNavActive(button) {
+    [ui.mobileDashboardBtn, ui.mobileFaultBtn, ui.mobileDetailsBtn].forEach(btn => {
+      if (btn) btn.classList.toggle('active', btn === button);
+    });
+  }
+
+  function closeMobileSheet() {
+    if (ui.detailsPanel) ui.detailsPanel.classList.remove('open');
+    setMobileNavActive(ui.mobileDashboardBtn);
+    setTimeout(() => map.invalidateSize({ animate:false }), 250);
+  }
+
+  function openMobileSheet(mode = 'details') {
+    if (window.innerWidth > 760) return;
+    ui.detailsPanel.classList.add('open');
+    if (mode === 'fault') {
+      setMobileNavActive(ui.mobileFaultBtn);
+      if (ui.mobileSheetSubtitle) ui.mobileSheetSubtitle.textContent = 'OTDR fault locator';
+      requestAnimationFrame(() => ui.otdrFaultCard?.scrollIntoView({ behavior:'smooth', block:'start' }));
+    } else {
+      setMobileNavActive(ui.mobileDetailsBtn);
+      if (ui.mobileSheetSubtitle) ui.mobileSheetSubtitle.textContent = 'Trace details & playback';
+      ui.detailsPanel.scrollTo({ top:0, behavior:'smooth' });
+    }
   }
 
   function traceFromSearch() {
@@ -774,6 +817,11 @@
       showError('Unable to load fiber topology data.');
     }
   }
+
+  window.addEventListener('resize', () => {
+    setTimeout(() => map.invalidateSize({ animate:false }), 120);
+    if (window.innerWidth > 760) ui.detailsPanel.classList.remove('open');
+  });
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
