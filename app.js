@@ -375,33 +375,74 @@
 
   function drawSourceRoutes({ fit = false } = {}) {
     state.sourceRouteLayer.clearLayers();
-    const allLatLngs = [];
+
+    const allNetworks = [...state.networks.values()];
+    const focusedNetworks = visibleNetworkList();
+    const fitLatLngs = [];
     const seen = new Set();
 
-    visibleNetworkList().forEach(network => {
-      const routeLines = network.relevantLineFeatures.length
+    function drawLine(line, { mainCable = false, includeInFit = false } = {}) {
+      const { pts, color } = line;
+      const geometryKey = color + '|' + pts.map(p => coordKey(p)).join(';');
+      if (seen.has(geometryKey)) return;
+      seen.add(geometryKey);
+
+      const latlngs = pts.map(p => {
+        const [lng, lat] = toLngLat(p);
+        if (includeInFit) fitLatLngs.push([lat, lng]);
+        return [lat, lng];
+      });
+
+      // Main cable is always visible. Distribution routes follow the selected FDC View.
+      if (mainCable) {
+        L.polyline(latlngs, {
+          color:'#ffffff', weight:6.2, opacity:.26, interactive:false
+        }).addTo(state.sourceRouteLayer);
+        L.polyline(latlngs, {
+          color:'#ff3b30', weight:3.6, opacity:.94, interactive:false
+        }).addTo(state.sourceRouteLayer);
+      } else {
+        const displayColor = color === '#0000FF' ? '#2563eb' : color;
+        L.polyline(latlngs, {
+          color:'#ffffff', weight:5.2, opacity:.22, interactive:false
+        }).addTo(state.sourceRouteLayer);
+        L.polyline(latlngs, {
+          color:displayColor, weight:3, opacity:.83, interactive:false
+        }).addTo(state.sourceRouteLayer);
+      }
+    }
+
+    // 1) RED = MAIN CABLE / FEEDER BACKBONE.
+    // Always keep it visible regardless of FDC View.
+    allNetworks.forEach(network => {
+      const lines = network.relevantLineFeatures.length
         ? network.relevantLineFeatures
         : network.lineFeatures;
 
-      routeLines.forEach(({ pts, color }) => {
-        const geometryKey = color + '|' + pts.map(p => coordKey(p)).join(';');
-        if (seen.has(geometryKey)) return;
-        seen.add(geometryKey);
-
-        const latlngs = pts.map(p => {
-          const [lng, lat] = toLngLat(p);
-          allLatLngs.push([lat, lng]);
-          return [lat, lng];
+      lines
+        .filter(line => line.color === '#FF0000')
+        .forEach(line => {
+          const includeInFit =
+            state.fdcView === 'ALL' ||
+            network.id === state.fdcView;
+          drawLine(line, { mainCable:true, includeInFit });
         });
-
-        const displayColor = color === '#FF0000' ? '#ff3b30' : color === '#0000FF' ? '#2563eb' : color;
-        L.polyline(latlngs, { color:'#ffffff', weight:5.2, opacity:.22, interactive:false }).addTo(state.sourceRouteLayer);
-        L.polyline(latlngs, { color:displayColor, weight:3, opacity:.83, interactive:false }).addTo(state.sourceRouteLayer);
-      });
     });
 
-    if (fit && allLatLngs.length) {
-      map.fitBounds(L.latLngBounds(allLatLngs), { padding:[28,28] });
+    // 2) BLUE = FDC distribution / branch routes.
+    // Only show branches belonging to the selected FDC, or all branches in ALL mode.
+    focusedNetworks.forEach(network => {
+      const lines = network.relevantLineFeatures.length
+        ? network.relevantLineFeatures
+        : network.lineFeatures;
+
+      lines
+        .filter(line => line.color !== '#FF0000')
+        .forEach(line => drawLine(line, { mainCable:false, includeInFit:true }));
+    });
+
+    if (fit && fitLatLngs.length) {
+      map.fitBounds(L.latLngBounds(fitLatLngs), { padding:[28,28] });
     }
   }
 
@@ -540,7 +581,7 @@
     if (changed || clearTrace) {
       ui.mapStatus.textContent = next === 'ALL'
         ? `All FDC routes visible • ${state.allDps.length} DP`
-        : `${next} focused • Other FDC routes hidden`;
+        : `${next} focused • Other FDC branches hidden • Main Cable visible`;
     }
   }
 
