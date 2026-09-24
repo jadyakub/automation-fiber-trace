@@ -280,3 +280,163 @@ button, input { font: inherit; }
   .leaflet-tooltip.node-label { font-size:9px; padding:3px 5px; }
   .leaflet-tooltip.fd-label { font-size:9px; padding:3px 5px; }
 }
+
+
+/* ===== OTDR Automation Fault Locator ===== */
+.otdr-card {
+  border-color:#fee2e2;
+  background:linear-gradient(180deg,#fff 0%,#fffafa 100%);
+}
+.otdr-card .card-title-row h2 { color:#991b1b; }
+.field-label {
+  display:block;
+  margin:10px 0 6px;
+  color:#475569;
+  font-size:11px;
+  font-weight:800;
+}
+.field-control {
+  width:100%;
+  height:42px;
+  border:1px solid #d9e2ec;
+  border-radius:10px;
+  background:#fff;
+  color:#172033;
+  padding:0 11px;
+  outline:none;
+  font-size:12px;
+  font-weight:700;
+}
+.field-control:focus {
+  border-color:#ef4444;
+  box-shadow:0 0 0 3px rgba(239,68,68,.10);
+}
+.fault-start-summary {
+  margin-top:8px;
+  padding:9px 10px;
+  border:1px solid #e7edf5;
+  border-radius:10px;
+  background:#f8fafc;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.fault-start-summary span { color:#64748b; font-size:10px; }
+.fault-start-summary strong { color:#172033; font-size:12px; }
+.distance-input-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 74px;
+  gap:8px;
+  align-items:center;
+}
+.unit-chip {
+  height:42px;
+  display:grid;
+  place-items:center;
+  border-radius:10px;
+  background:#f1f5f9;
+  border:1px solid #d9e2ec;
+  color:#334155;
+  font-size:11px;
+  font-weight:900;
+}
+.fault-btn {
+  width:100%;
+  height:44px;
+  margin-top:10px;
+  border:0;
+  border-radius:10px;
+  background:#b91c1c;
+  color:#fff;
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:.01em;
+  box-shadow:0 8px 18px rgba(185,28,28,.18);
+  cursor:pointer;
+}
+.fault-btn:hover { background:#991b1b; }
+.fault-btn:disabled { background:#cbd5e1; box-shadow:none; cursor:not-allowed; }
+.field-help {
+  margin:8px 0 0;
+  color:#64748b;
+  font-size:9.5px;
+  line-height:1.45;
+}
+.fault-result {
+  margin-top:10px;
+  padding:10px;
+  border-radius:11px;
+  background:#fff;
+  border:1px solid #fecaca;
+}
+.fault-result > div {
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  padding:5px 0;
+  border-bottom:1px solid #f1f5f9;
+}
+.fault-result > div:last-of-type { border-bottom:0; }
+.fault-result span { font-size:10px; color:#64748b; }
+.fault-result strong { font-size:10px; color:#111827; text-align:right; }
+.gps-btn {
+  width:100%;
+  margin-top:8px;
+  height:36px;
+  border:1px solid #bfdbfe;
+  border-radius:9px;
+  background:#eff6ff;
+  color:#1d4ed8;
+  font-size:11px;
+  font-weight:800;
+  cursor:pointer;
+}
+.fault-marker-wrap {
+  position:relative;
+  width:44px;
+  height:44px;
+}
+.fault-marker {
+  position:absolute;
+  left:8px;
+  top:8px;
+  width:28px;
+  height:28px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:#dc2626;
+  color:#fff;
+  border:4px solid #fff;
+  box-shadow:0 0 0 5px rgba(220,38,38,.25),0 5px 14px rgba(0,0,0,.35);
+  font-size:14px;
+}
+.fault-marker::after {
+  content:"";
+  position:absolute;
+  inset:-13px;
+  border:3px solid rgba(220,38,38,.38);
+  border-radius:50%;
+  animation:faultPulse 1.15s ease-out infinite;
+}
+@keyframes faultPulse {
+  from { transform:scale(.55); opacity:1; }
+  to { transform:scale(1.55); opacity:0; }
+}
+.leaflet-tooltip.fault-label {
+  background:#991b1b;
+  color:#fff;
+  border:0;
+  border-radius:8px;
+  box-shadow:0 5px 16px rgba(15,23,42,.22);
+  font-size:10px;
+  font-weight:900;
+  padding:5px 8px;
+}
+.leaflet-tooltip.fault-label::before { display:none; }
+
+@media (max-width:760px) {
+  .otdr-card { order:-1; }
+  .fault-btn { height:46px; font-size:11px; }
+  .field-control,.unit-chip { height:44px; }
+}
