@@ -38,7 +38,10 @@
     markerEntries: new Map(),
     markersByName: new Map(),
     lastPan: 0,
-    topologyReport: null
+    topologyReport: null,
+    faultMarker: null,
+    faultSegmentLayer: null,
+    faultGps: null
   };
 
   const $ = id => document.getElementById(id);
@@ -50,7 +53,12 @@
     resetBtn: $('resetBtn'), speedControl: $('speedControl'), mapStatus: $('mapStatus'), detailsPanel: $('detailsPanel'),
     mobileDetailsBtn: $('mobileDetailsBtn'), networkBadge: $('networkBadge'), mobileTraceBar: $('mobileTraceBar'),
     mobileTraceInfo: $('mobileTraceInfo'), mobileTraceNode: $('mobileTraceNode'),
-    mobileTraceDistance: $('mobileTraceDistance'), mobilePlayBtn: $('mobilePlayBtn')
+    mobileTraceDistance: $('mobileTraceDistance'), mobilePlayBtn: $('mobilePlayBtn'),
+    faultStartSelect: $('faultStartSelect'), faultSelectedStart: $('faultSelectedStart'),
+    faultDistanceInput: $('faultDistanceInput'), locateFaultBtn: $('locateFaultBtn'),
+    faultStatus: $('faultStatus'), faultResult: $('faultResult'), faultGps: $('faultGps'),
+    faultFromStart: $('faultFromStart'), faultBalance: $('faultBalance'),
+    faultGoogleMapsBtn: $('faultGoogleMapsBtn')
   };
 
   const map = L.map('map', { zoomControl: true, attributionControl: true, preferCanvas: true });
@@ -80,6 +88,12 @@
     iconSize: [40,40], iconAnchor: [20,20]
   });
 
+  const faultIcon = L.divIcon({
+    className: '',
+    html: '<div class="fault-marker-wrap"><div class="fault-marker">✂</div></div>',
+    iconSize: [44,44], iconAnchor: [22,22]
+  });
+
   function mercatorToLngLat(x, y) {
     const lng = x / 20037508.34 * 180;
     let lat = y / 20037508.34 * 180;
@@ -107,7 +121,7 @@
 
   function labelTypeName(name) {
     const n = String(name || '').trim();
-    if (/^DP\d/i.test(n)) return 'dp';
+    if (/^(DP|FDP)\d/i.test(n) || /_(DP|FDP)\d/i.test(n)) return 'dp';
     if (/^FDC\b/i.test(n)) return 'fdc';
     if (/^(JT|JOINT|CLOSURE)\b/i.test(n)) return 'jt';
     if (/^FD\d\b/i.test(n)) return 'fd';
@@ -403,8 +417,110 @@
     state.directionLayer.clearLayers();
   }
 
+  function populateFaultStarts() {
+    if (!ui.faultStartSelect) return;
+    const sorted = state.dps.slice().sort((a,b) => a.name.localeCompare(b.name, undefined, { numeric:true }));
+    ui.faultStartSelect.innerHTML = '<option value="">Select FDP/DP</option>' +
+      sorted.map(dp => `<option value="${escapeHtml(dp.name)}">${escapeHtml(dp.name)}</option>`).join('');
+  }
+
+  function syncFaultStart(name) {
+    if (!ui.faultStartSelect) return;
+    const match = state.dps.find(dp => dp.name.toUpperCase() === String(name || '').toUpperCase());
+    if (!match) return;
+    ui.faultStartSelect.value = match.name;
+    ui.faultSelectedStart.textContent = match.name;
+  }
+
+  function clearFaultLocator(clearForm = false) {
+    if (state.faultMarker) { state.faultMarker.remove(); state.faultMarker = null; }
+    if (state.faultSegmentLayer) { state.faultSegmentLayer.remove(); state.faultSegmentLayer = null; }
+    state.faultGps = null;
+    if (ui.faultResult) ui.faultResult.classList.add('hidden');
+    if (ui.faultStatus) {
+      ui.faultStatus.textContent = 'Ready';
+      ui.faultStatus.classList.remove('active');
+    }
+    if (clearForm && ui.faultDistanceInput) ui.faultDistanceInput.value = '';
+  }
+
+  function routePrefixAtDistance(latlngs, metric, target) {
+    const points = [latlngs[0]];
+    let acc = 0;
+    for (let i = 0; i < metric.segs.length; i++) {
+      const d = metric.segs[i];
+      if (acc + d >= target) {
+        points.push(pointAtDistance(latlngs, metric, target));
+        break;
+      }
+      points.push(latlngs[i + 1]);
+      acc += d;
+    }
+    return points;
+  }
+
+  function setFaultError(message) {
+    ui.faultStatus.textContent = 'Check input';
+    ui.faultStatus.classList.remove('active');
+    ui.mapStatus.textContent = message;
+    ui.faultResult.classList.add('hidden');
+  }
+
+  function locateOtdrFault() {
+    const startName = ui.faultStartSelect.value;
+    const distanceM = Number(ui.faultDistanceInput.value);
+    if (!startName) return setFaultError('Select a start FDP/DP.');
+    if (!Number.isFinite(distanceM) || distanceM <= 0) return setFaultError('Enter a valid OTDR fault distance in meter.');
+
+    const start = state.dps.find(dp => dp.name.toUpperCase() === startName.toUpperCase());
+    if (!start || !state.defaultFdc) return setFaultError('Selected FDP/DP is not registered in topology.');
+
+    // Reuse the same validated topology engine used by Fiber Trace.
+    selectAndTrace(start.name, false);
+    const route = state.activeRoute;
+    if (!route) return setFaultError('No registered fiber route found from this FDP/DP to FDC.');
+
+    if (distanceM > route.distance + 1) {
+      return setFaultError(`OTDR distance ${distanceM.toFixed(0)} m exceeds registered route ${route.distance.toFixed(0)} m to FDC.`);
+    }
+
+    clearFaultLocator(false);
+    const metric = routeMetric(route.latlngs);
+    const targetOnMap = metric.total * Math.min(1, distanceM / route.distance);
+    const point = pointAtDistance(route.latlngs, metric, targetOnMap);
+    const prefix = routePrefixAtDistance(route.latlngs, metric, targetOnMap);
+
+    state.faultSegmentLayer = L.polyline(prefix, {
+      color:'#dc2626', weight:6, opacity:.9, dashArray:'10 7',
+      lineCap:'round', lineJoin:'round', interactive:false
+    }).addTo(map);
+    state.faultSegmentLayer.bringToFront();
+
+    state.faultMarker = L.marker(point, {
+      icon:faultIcon, zIndexOffset:2600, riseOnHover:true
+    }).addTo(map);
+    state.faultMarker.bindTooltip(
+      `Suspected Cut • ${Math.round(distanceM)} m from ${start.name}`,
+      { permanent:true, direction:'top', offset:[0,-18], className:'fault-label', opacity:1 }
+    ).openTooltip();
+
+    state.faultGps = { lat: point.lat, lng: point.lng };
+    const balance = Math.max(0, route.distance - distanceM);
+    ui.faultGps.textContent = `${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+    ui.faultFromStart.textContent = `${Math.round(distanceM)} m`;
+    ui.faultBalance.textContent = formatKm(balance);
+    ui.faultResult.classList.remove('hidden');
+    ui.faultStatus.textContent = 'Located';
+    ui.faultStatus.classList.add('active');
+    ui.mapStatus.textContent = `Suspected cut • ${Math.round(distanceM)} m from ${start.name} • GPS ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+
+    map.setView(point, Math.max(map.getZoom(), 18), { animate:true });
+    if (window.innerWidth <= 760) ui.detailsPanel.classList.remove('open');
+  }
+
   function selectAndTrace(name, openMobilePanel = false) {
     stopAnimation(false);
+    clearFaultLocator(false);
     const dp = state.dps.find(x => x.name.toUpperCase() === String(name).toUpperCase());
     if (!dp || !state.defaultFdc) return showError('DP or FDC not found.');
     const route = findRoute(dp, state.defaultFdc);
@@ -430,6 +546,7 @@
     ui.mapStatus.textContent = `${dp.name} → ${state.defaultFdc.name} • ${(route.distance / 1000).toFixed(3)} km`;
     ui.playBtn.disabled = false; ui.resetBtn.disabled = false; ui.mobilePlayBtn.disabled = false;
     ui.searchInput.value = dp.name;
+    syncFaultStart(dp.name);
     syncPlayButtons('ready');
     if (openMobilePanel && window.innerWidth <= 760) ui.detailsPanel.classList.add('open');
   }
@@ -552,7 +669,7 @@
       ui.searchResults.classList.add('hidden'); ui.searchResults.innerHTML = ''; return;
     }
     ui.searchResults.innerHTML = items.map(x =>
-      `<button type="button" data-name="${escapeHtml(x.name)}"><span>${escapeHtml(x.name)}</span><small>${/^DP/i.test(x.name) ? 'DP' : 'FDC'}</small></button>`
+      `<button type="button" data-name="${escapeHtml(x.name)}"><span>${escapeHtml(x.name)}</span><small>${labelTypeName(x.name) === 'dp' ? 'FDP/DP' : 'FDC'}</small></button>`
     ).join('');
     ui.searchResults.classList.remove('hidden');
   }
@@ -570,7 +687,7 @@
       const btn = e.target.closest('button[data-name]'); if (!btn) return;
       ui.searchInput.value = btn.dataset.name;
       ui.searchResults.classList.add('hidden');
-      if (/^DP/i.test(btn.dataset.name)) selectAndTrace(btn.dataset.name, false);
+      if (/^(DP|FDP)/i.test(btn.dataset.name) || /_(DP|FDP)/i.test(btn.dataset.name)) selectAndTrace(btn.dataset.name, false);
     });
     document.addEventListener('click', e => {
       if (!e.target.closest('.search-box')) ui.searchResults.classList.add('hidden');
@@ -580,6 +697,27 @@
     ui.mobilePlayBtn.addEventListener('click', playTrace);
     ui.resetBtn.addEventListener('click', resetTrace);
     ui.mobileTraceInfo.addEventListener('click', () => ui.detailsPanel.classList.add('open'));
+
+    ui.faultStartSelect.addEventListener('change', () => {
+      const name = ui.faultStartSelect.value;
+      ui.faultSelectedStart.textContent = name || '—';
+      if (name) {
+        const dp = state.dps.find(x => x.name.toUpperCase() === name.toUpperCase());
+        if (dp) {
+          const route = findRoute(dp, state.defaultFdc);
+          if (route) ui.faultStatus.textContent = `${Math.round(route.distance)} m to FDC`;
+        }
+      }
+    });
+    ui.locateFaultBtn.addEventListener('click', locateOtdrFault);
+    ui.faultDistanceInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); locateOtdrFault(); }
+    });
+    ui.faultGoogleMapsBtn.addEventListener('click', () => {
+      if (!state.faultGps) return;
+      const { lat, lng } = state.faultGps;
+      window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank', 'noopener');
+    });
 
     ui.speedControl.addEventListener('click', e => {
       const btn = e.target.closest('button[data-speed]'); if (!btn) return;
@@ -618,6 +756,7 @@
       }));
       state.geojson = { type:'FeatureCollection', features:parts.flatMap(p => p.features || []) };
       buildTopology(state.geojson);
+      populateFaultStarts();
 
       const report = state.topologyReport;
       if (report && report.connected === report.total) {
