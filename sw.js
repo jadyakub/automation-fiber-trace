@@ -1,4 +1,4 @@
-const CACHE = 'automation-fiber-trace-v2';
+const CACHE = 'automation-fiber-trace-v3';
 const CORE = [
   '/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/assets/app-icon.svg',
   '/data/f14-kgu-c029m-1.geojson', '/data/f14-kgu-c029m-2.geojson',
