@@ -22,6 +22,8 @@ Mobile-first fiber topology tracing web app for DP → FDC route visualization a
 - Existing red/blue route layers explained in the UI
 - Direction arrows on active DP → FDC route
 - Stronger moving pulse and mobile quick playback bar
+- FDC View filter: show All FDC or focus one FDC while hiding other route layers
+- Selecting a DP auto-focuses its registered FDC to keep the map clean
 - OTDR Fault Locator: select FDP/DP + enter OTDR distance to locate suspected cut along registered fiber topology
 - Suspected-cut GPS result with Google Maps quick open
 
@@ -49,6 +51,7 @@ Use the Deploy to Netlify button above, or import this repository from the Netli
 
 ## Registered FDC Routes
 - FDC KGU C029M — 18 DP validated
+- FDC KGU C045M — 19 DP validated
 - FDC KGU C046M — 21 DP validated
 
 The tracing engine isolates each FDC topology internally, so identical DP names such as DP0001 can coexist across different FDC routes without cross-routing.
@@ -62,3 +65,5 @@ The app intentionally fetches topology data with `no-store` behavior so future d
 
 
 C046M source data is stored as `data/f14-kgu-c046m-1.geojson` through `data/f14-kgu-c046m-6.geojson`.
+
+C045M source data is stored as `data/f14-kgu-c045m.geojson`.
