@@ -1289,7 +1289,7 @@
       networks.forEach(network => state.networks.set(network.id, network));
 
       state.allDps = networks.flatMap(network => network.dps);
-      state.allFdcs = networks.map(network => network.targetFdc).filter(Boolean);
+      state.allFdcs = allMainCableFdcs();
       state.allFds = networks.flatMap(network => network.fds);
       state.topologyReports = networks.map(network => network.report);
 
