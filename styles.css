@@ -440,3 +440,369 @@ button, input { font: inherit; }
   .fault-btn { height:46px; font-size:11px; }
   .field-control,.unit-chip { height:44px; }
 }
+
+
+/* ===== V4 Mobile-first refinement ===== */
+.mobile-sheet-head { display:none; }
+
+@media (max-width:760px) {
+  :root { --header-h:54px; }
+
+  html, body, #app { width:100%; height:100%; }
+  body { overscroll-behavior:none; }
+
+  .app-header {
+    height:var(--header-h);
+    padding:0 10px;
+    border-bottom:1px solid rgba(226,232,240,.92);
+  }
+  .app-header > div:first-child { gap:8px !important; }
+  .app-header img { width:28px !important; height:28px !important; }
+  .app-header h1 { font-size:15px !important; line-height:1.1; }
+  .status-badge {
+    width:30px;
+    height:30px;
+    display:grid;
+    place-items:center;
+    padding:0;
+    background:#f0fdf4;
+  }
+  .status-badge .status-dot { margin:0; }
+  .status-badge { color:transparent; overflow:hidden; }
+
+  .app-shell { height:calc(100dvh - var(--header-h)); }
+  .main-panel {
+    height:100%;
+    padding:8px;
+    gap:8px;
+    padding-bottom:70px;
+  }
+
+  .search-row {
+    grid-template-columns:minmax(0,1fr) 44px;
+    gap:7px;
+    z-index:1400;
+  }
+  .search-box {
+    height:44px;
+    border-radius:12px;
+    box-shadow:0 5px 16px rgba(15,23,42,.07);
+  }
+  .search-icon {
+    width:18px;
+    height:18px;
+    margin-left:13px;
+  }
+  .search-box input {
+    font-size:16px; /* prevents iOS auto zoom */
+    padding-left:9px;
+    padding-right:10px;
+  }
+  .search-box input::placeholder {
+    font-size:12px;
+  }
+  .search-results {
+    top:50px;
+    max-height:min(42dvh,320px);
+    border-radius:12px;
+    padding:5px;
+  }
+  .search-results button {
+    min-height:44px;
+    align-items:center;
+    padding:9px 10px;
+  }
+  .primary-btn {
+    width:44px;
+    height:44px;
+    min-width:44px;
+    padding:0;
+    border-radius:12px;
+    box-shadow:0 6px 16px rgba(22,119,255,.24);
+  }
+
+  .workspace {
+    position:relative;
+    display:block;
+    height:calc(100% - 52px);
+    min-height:0;
+  }
+  .map-card {
+    height:100%;
+    min-height:0;
+    border-radius:14px;
+    box-shadow:none;
+  }
+  #map { height:100%; min-height:0; }
+
+  .map-layer-toggle {
+    left:8px;
+    top:8px;
+    border-radius:9px;
+  }
+  .map-layer-toggle button {
+    min-height:34px;
+    padding:6px 9px;
+    font-size:10px;
+  }
+  .leaflet-control-zoom {
+    margin-top:52px !important;
+    margin-left:8px !important;
+  }
+  .leaflet-control-zoom a {
+    width:34px !important;
+    height:34px !important;
+    line-height:34px !important;
+  }
+
+  .details-panel {
+    position:fixed;
+    z-index:2200;
+    left:0;
+    right:0;
+    bottom:0;
+    height:min(82dvh,720px);
+    max-height:none;
+    padding:0 10px calc(82px + env(safe-area-inset-bottom));
+    gap:10px;
+    border-radius:22px 22px 0 0;
+    background:#f8fafc;
+    box-shadow:0 -18px 44px rgba(15,23,42,.20);
+    transform:translateY(105%);
+    transition:transform .24s cubic-bezier(.2,.8,.2,1);
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+  }
+  .details-panel.open { transform:translateY(0); }
+  .details-panel::before { display:none; }
+
+  .mobile-sheet-head {
+    position:sticky;
+    top:0;
+    z-index:5;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin:0 -10px;
+    padding:10px 12px 9px;
+    background:rgba(248,250,252,.97);
+    backdrop-filter:blur(14px);
+    border-bottom:1px solid #e7edf4;
+  }
+  .mobile-sheet-head::before {
+    content:"";
+    position:absolute;
+    top:5px;
+    left:50%;
+    width:38px;
+    height:4px;
+    transform:translateX(-50%);
+    border-radius:999px;
+    background:#cbd5e1;
+  }
+  .mobile-sheet-head > div {
+    display:flex;
+    flex-direction:column;
+    gap:1px;
+    padding-top:5px;
+  }
+  .mobile-sheet-head strong {
+    font-size:13px;
+    color:#172033;
+  }
+  .mobile-sheet-head span {
+    font-size:10px;
+    color:#64748b;
+  }
+  .mobile-sheet-head button {
+    width:34px;
+    height:34px;
+    border:0;
+    border-radius:50%;
+    background:#e9eef5;
+    color:#334155;
+    font-size:22px;
+    line-height:1;
+  }
+
+  .info-card {
+    padding:12px;
+    border-radius:14px;
+    box-shadow:none;
+    border-color:#e6edf5;
+  }
+  .info-card h2 { font-size:13px; }
+  .card-title-row { margin-bottom:8px; }
+
+  .trace-detail-card .detail-list {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:7px;
+  }
+  .trace-detail-card .detail-list > div {
+    display:block;
+    min-width:0;
+    padding:9px;
+    border:1px solid #edf1f6;
+    border-radius:10px;
+    background:#f8fafc;
+  }
+  .trace-detail-card .detail-list dt {
+    font-size:9px;
+    margin-bottom:3px;
+  }
+  .trace-detail-card .detail-list dd {
+    text-align:left;
+    font-size:11px;
+    white-space:normal;
+    overflow-wrap:anywhere;
+  }
+  .trace-detail-card .detail-list > div:last-child {
+    grid-column:1 / -1;
+  }
+
+  .playback-card {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 74px;
+    gap:8px;
+    align-items:center;
+  }
+  .playback-card .card-title-row {
+    grid-column:1 / -1;
+    margin-bottom:0;
+  }
+  .playback-card .play-btn {
+    height:46px;
+    margin:0;
+  }
+  .playback-card .secondary-btn {
+    height:46px;
+    margin:0;
+  }
+  .playback-card .speed-row {
+    grid-column:1 / -1;
+    margin-top:2px;
+  }
+  .segmented { flex:1; justify-content:flex-end; }
+  .segmented button {
+    min-height:32px;
+    padding:7px 13px;
+  }
+
+  .otdr-card {
+    padding:12px;
+    border:1px solid #fecaca;
+    background:#fff;
+  }
+  .otdr-card .card-title-row {
+    padding-bottom:7px;
+    border-bottom:1px solid #fee2e2;
+  }
+  .field-label {
+    margin:9px 0 5px;
+    font-size:10px;
+  }
+  .field-control, .unit-chip {
+    height:46px;
+    font-size:16px;
+  }
+  select.field-control { font-size:13px; }
+  .fault-start-summary {
+    display:none;
+  }
+  .distance-input-row {
+    grid-template-columns:minmax(0,1fr) 68px;
+    gap:7px;
+  }
+  .unit-chip { font-size:10px; }
+  .fault-btn {
+    height:48px;
+    margin-top:9px;
+    border-radius:11px;
+    font-size:11px;
+  }
+  .field-help {
+    font-size:9px;
+    margin-top:6px;
+  }
+  .fault-result {
+    padding:9px;
+    margin-top:8px;
+  }
+  .fault-result > div { padding:6px 0; }
+  .fault-result span,
+  .fault-result strong { font-size:10px; }
+  .gps-btn { height:42px; }
+
+  .legend-card { display:none; }
+
+  .mobile-trace-bar {
+    left:8px;
+    right:8px;
+    bottom:calc(65px + env(safe-area-inset-bottom));
+    min-height:56px;
+    padding:7px 7px 7px 11px;
+    border-radius:15px;
+    z-index:1800;
+  }
+  .mobile-trace-info strong { font-size:11px; }
+  .mobile-trace-info span { font-size:9px; }
+  .mobile-play-btn {
+    width:42px;
+    height:42px;
+    flex-basis:42px;
+  }
+
+  .mobile-nav {
+    height:calc(60px + env(safe-area-inset-bottom));
+    padding-bottom:env(safe-area-inset-bottom);
+    z-index:2300;
+  }
+  .mobile-nav button {
+    min-width:74px;
+    min-height:48px;
+    gap:1px;
+  }
+  .mobile-nav button span { font-size:17px; }
+  .mobile-nav small { font-size:9px; }
+
+  .node-marker {
+    width:20px;
+    height:20px;
+    border-width:2.5px;
+    font-size:8px;
+  }
+  .node-marker.fdc { width:24px; height:24px; }
+  .node-marker.fd { width:20px; height:20px; }
+  .leaflet-tooltip.node-label,
+  .leaflet-tooltip.fd-label {
+    font-size:8px;
+    padding:3px 5px;
+  }
+  .leaflet-tooltip.dp-selected { font-size:10px; }
+  .route-arrow { font-size:15px; }
+  .fault-marker-wrap { transform:scale(.88); }
+  .leaflet-tooltip.fault-label {
+    max-width:180px;
+    white-space:normal;
+    text-align:center;
+    font-size:9px;
+  }
+}
+
+@media (max-width:390px) {
+  .app-header h1 { font-size:14px !important; }
+  .main-panel { padding-left:6px; padding-right:6px; }
+  .mobile-trace-bar { left:6px; right:6px; }
+  .trace-detail-card .detail-list { grid-template-columns:1fr; }
+  .trace-detail-card .detail-list > div:last-child { grid-column:auto; }
+  .segmented button { padding-left:10px; padding-right:10px; }
+}
+
+@media (max-height:650px) and (max-width:760px) {
+  .details-panel { height:88dvh; }
+  .mobile-trace-bar { min-height:50px; }
+  .mobile-nav { height:56px; }
+}
