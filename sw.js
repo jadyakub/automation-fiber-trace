@@ -1,8 +1,9 @@
-const CACHE = 'automation-fiber-trace-v5';
+const CACHE = 'automation-fiber-trace-v6';
 const CORE = [
   '/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/assets/app-icon.svg',
   '/data/f14-kgu-c029m-1.geojson', '/data/f14-kgu-c029m-2.geojson',
   '/data/f14-kgu-c029m-3.geojson', '/data/f14-kgu-c029m-4.geojson',
+  '/data/f14-kgu-c045m.geojson',
   '/data/f14-kgu-c046m-1.geojson', '/data/f14-kgu-c046m-2.geojson', '/data/f14-kgu-c046m-3.geojson',
   '/data/f14-kgu-c046m-4.geojson', '/data/f14-kgu-c046m-5.geojson', '/data/f14-kgu-c046m-6.geojson'
 ];
