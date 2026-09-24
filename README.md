@@ -4,7 +4,7 @@ Mobile-first fiber topology tracing web app for DP → FDC route visualization a
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/jadyakub/automation-fiber-trace)
 
-## V1 Features
+## V2 Features
 - Load fiber topology from GeoJSON
 - Auto-detect DP / FDC / Joint labels
 - Tap or search DP to trace shortest connected fiber route back to `FDC KGU C029M`
@@ -17,6 +17,11 @@ Mobile-first fiber topology tracing web app for DP → FDC route visualization a
 - Responsive desktop and mobile UI
 - PWA-ready shell
 - Netlify-ready static deployment
+- Validated topology check for all registered DP
+- Clear DP / FDC / Joint / FD Cable markers
+- Existing red/blue route layers explained in the UI
+- Direction arrows on active DP → FDC route
+- Stronger moving pulse and mobile quick playback bar
 
 ## Stack
 - HTML
