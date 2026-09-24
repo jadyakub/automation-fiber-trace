@@ -87,6 +87,7 @@
                 <div><dt>Total Distance</dt><dd id="totalDistance">—</dd></div>
                 <div><dt>Distance Covered</dt><dd id="coveredDistance">—</dd></div>
                 <div><dt>Balance to FDC</dt><dd id="balanceDistance">—</dd></div>
+                <div><dt>FD Cable</dt><dd id="fdCablePath">—</dd></div>
               </dl>
             </section>
 
@@ -110,12 +111,23 @@
                 <div><span class="legend-node fdc">F</span><span>FDC</span></div>
                 <div><span class="legend-node dp">D</span><span>DP</span></div>
                 <div><span class="legend-node jt">J</span><span>Joint / Closure</span></div>
-                <div><span class="legend-line"></span><span>Active Fiber Route</span></div>
+                <div><span class="legend-node fd">FD</span><span>FD Cable (FD1 / FD2)</span></div>
+                <div><span class="legend-line source-red"></span><span><b>Red</b> — Existing Main / Feeder route</span></div>
+                <div><span class="legend-line source-blue"></span><span><b>Blue</b> — Existing Distribution / branch route</span></div>
+                <div><span class="legend-line active-route"></span><span><b>Yellow</b> — Active traced route DP → FDC</span></div>
               </div>
             </section>
           </aside>
         </section>
       </main>
+    </div>
+
+    <div id="mobileTraceBar" class="mobile-trace-bar">
+      <button id="mobileTraceInfo" class="mobile-trace-info" type="button">
+        <strong id="mobileTraceNode">Select DP</strong>
+        <span id="mobileTraceDistance">Tap a DP to trace</span>
+      </button>
+      <button id="mobilePlayBtn" class="mobile-play-btn" type="button" disabled>▶</button>
     </div>
 
     <nav class="mobile-nav">
