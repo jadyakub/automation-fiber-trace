@@ -105,6 +105,39 @@
               </div>
             </section>
 
+            <section class="info-card otdr-card" id="otdrFaultCard">
+              <div class="card-title-row">
+                <h2>⚡ Automation Fault Locator</h2>
+                <span id="faultStatus" class="mini-status">Ready</span>
+              </div>
+
+              <label class="field-label" for="faultStartSelect">Select Start FDP/DP</label>
+              <select id="faultStartSelect" class="field-control">
+                <option value="">Select FDP/DP</option>
+              </select>
+
+              <div class="fault-start-summary">
+                <span>Selected Start Point</span>
+                <strong id="faultSelectedStart">—</strong>
+              </div>
+
+              <label class="field-label" for="faultDistanceInput">OTDR fault distance from FDP/DP</label>
+              <div class="distance-input-row">
+                <input id="faultDistanceInput" class="field-control" type="number" min="1" step="1" inputmode="numeric" placeholder="Example: 200" />
+                <span class="unit-chip">meter</span>
+              </div>
+
+              <button id="locateFaultBtn" class="fault-btn" type="button">▶ LOCATE SUSPECTED CUT</button>
+              <p class="field-help">Distance follows the registered fiber route toward the FDC, not a straight-line radius.</p>
+
+              <div id="faultResult" class="fault-result hidden">
+                <div><span>Fault GPS</span><strong id="faultGps">—</strong></div>
+                <div><span>From Start</span><strong id="faultFromStart">—</strong></div>
+                <div><span>Balance to FDC</span><strong id="faultBalance">—</strong></div>
+                <button id="faultGoogleMapsBtn" class="gps-btn" type="button">📍 Open GPS Fault</button>
+              </div>
+            </section>
+
             <section class="info-card legend-card">
               <h2>Route Legend</h2>
               <div class="legend-list">
