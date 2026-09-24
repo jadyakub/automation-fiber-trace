@@ -41,6 +41,6 @@ Connect this repository to Netlify and deploy from the default branch.
 ## Data
 Current seed topology:
 
-`data/f14-kgu-c029m.geojson`
+`data/f14-kgu-c029m-1.geojson` through `data/f14-kgu-c029m-4.geojson`
 
 The app intentionally fetches topology data with `no-store` behavior so future data replacement can refresh without rebuilding application code.
