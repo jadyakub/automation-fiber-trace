@@ -22,6 +22,8 @@ Mobile-first fiber topology tracing web app for DP → FDC route visualization a
 - Existing red/blue route layers explained in the UI
 - Direction arrows on active DP → FDC route
 - Stronger moving pulse and mobile quick playback bar
+- OTDR Fault Locator: select FDP/DP + enter OTDR distance to locate suspected cut along registered fiber topology
+- Suspected-cut GPS result with Google Maps quick open
 
 ## Stack
 - HTML
