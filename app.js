@@ -1,27 +1,41 @@
 (() => {
   'use strict';
 
-  const DATA_URLS = [
-    '/data/f14-kgu-c029m-1.geojson',
-    '/data/f14-kgu-c029m-2.geojson',
-    '/data/f14-kgu-c029m-3.geojson',
-    '/data/f14-kgu-c029m-4.geojson'
+  const NETWORK_CONFIGS = [
+    {
+      id: 'C029M',
+      fdcName: 'FDC KGU C029M',
+      dataUrls: [
+        '/data/f14-kgu-c029m-1.geojson',
+        '/data/f14-kgu-c029m-2.geojson',
+        '/data/f14-kgu-c029m-3.geojson',
+        '/data/f14-kgu-c029m-4.geojson'
+      ]
+    },
+    {
+      id: 'C046M',
+      fdcName: 'FDC KGU C046M',
+      dataUrls: [
+        '/data/f14-kgu-c046m-1.geojson',
+        '/data/f14-kgu-c046m-2.geojson',
+        '/data/f14-kgu-c046m-3.geojson',
+        '/data/f14-kgu-c046m-4.geojson',
+        '/data/f14-kgu-c046m-5.geojson',
+        '/data/f14-kgu-c046m-6.geojson'
+      ]
+    }
   ];
-  const DEFAULT_FDC = 'FDC KGU C029M';
+
   const SNAP_METERS = 5;
   const FD_ROUTE_TOLERANCE_METERS = 16;
 
   const state = {
-    geojson: null,
-    labels: [],
-    dps: [],
-    fdcs: [],
-    joints: [],
-    fds: [],
-    graph: new Map(),
-    nodeCoords: new Map(),
-    defaultFdc: null,
+    networks: new Map(),
+    allDps: [],
+    allFdcs: [],
+    allFds: [],
     selectedDp: null,
+    activeNetwork: null,
     activeRoute: null,
     routeLayer: null,
     routeShadowLayer: null,
@@ -36,12 +50,13 @@
     markerLayer: null,
     sourceRouteLayer: null,
     markerEntries: new Map(),
-    markersByName: new Map(),
+    markerDedup: new Set(),
     lastPan: 0,
-    topologyReport: null,
+    topologyReports: [],
     faultMarker: null,
     faultSegmentLayer: null,
-    faultGps: null
+    faultGps: null,
+    selectedSearchDp: null
   };
 
   const $ = id => document.getElementById(id);
@@ -112,16 +127,6 @@
   const coordKey = p => `${Number(p[0]).toFixed(3)},${Number(p[1]).toFixed(3)}`;
   const xyDistance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-  function addEdge(a, b, weight, meta = {}) {
-    const ak = coordKey(a), bk = coordKey(b);
-    if (ak === bk) return;
-    state.nodeCoords.set(ak, a); state.nodeCoords.set(bk, b);
-    if (!state.graph.has(ak)) state.graph.set(ak, []);
-    if (!state.graph.has(bk)) state.graph.set(bk, []);
-    state.graph.get(ak).push({ to: bk, weight, ...meta });
-    state.graph.get(bk).push({ to: ak, weight, ...meta });
-  }
-
   function labelTypeName(name) {
     const n = String(name || '').trim();
     if (/^(DP|FDP)\d/i.test(n) || /_(DP|FDP)\d/i.test(n)) return 'dp';
@@ -131,31 +136,62 @@
     return null;
   }
 
-  function buildTopology(data) {
-    state.graph.clear(); state.nodeCoords.clear(); state.labels = [];
-    const endpoints = [];
-    const lineFeatures = [];
+  function createNetwork(config, data) {
+    const network = {
+      id: config.id,
+      fdcName: config.fdcName,
+      labels: [],
+      dps: [],
+      fdcs: [],
+      joints: [],
+      fds: [],
+      graph: new Map(),
+      nodeCoords: new Map(),
+      lineFeatures: [],
+      targetFdc: null,
+      report: null
+    };
 
-    data.features.forEach((f, idx) => {
-      const g = f.geometry || {};
-      const props = f.properties || {};
-      if (g.type === 'Point') {
-        const text = String(props?.__style?.text || props.name || '').trim();
-        if (text) state.labels.push({ id: `p${idx}`, name: text, xy: [Number(g.coordinates[0]), Number(g.coordinates[1])], props });
-      } else if (g.type === 'LineString') {
-        const pts = g.coordinates.map(c => [Number(c[0]), Number(c[1])]);
+    function addEdge(a, b, weight, meta = {}) {
+      const ak = coordKey(a), bk = coordKey(b);
+      if (ak === bk) return;
+      network.nodeCoords.set(ak, a);
+      network.nodeCoords.set(bk, b);
+      if (!network.graph.has(ak)) network.graph.set(ak, []);
+      if (!network.graph.has(bk)) network.graph.set(bk, []);
+      network.graph.get(ak).push({ to: bk, weight, ...meta });
+      network.graph.get(bk).push({ to: ak, weight, ...meta });
+    }
+
+    const endpoints = [];
+    data.features.forEach((feature, idx) => {
+      const geometry = feature.geometry || {};
+      const props = feature.properties || {};
+      if (geometry.type === 'Point') {
+        const name = String(props?.__style?.text || props.name || '').trim();
+        if (name) {
+          network.labels.push({
+            id: `${network.id}:p${idx}`,
+            networkId: network.id,
+            name,
+            xy: [Number(geometry.coordinates[0]), Number(geometry.coordinates[1])],
+            props
+          });
+        }
+      } else if (geometry.type === 'LineString') {
+        const pts = geometry.coordinates.map(c => [Number(c[0]), Number(c[1])]);
         const color = String(props?.__style?.strokeColor || '#4d6a87').toUpperCase();
-        lineFeatures.push({ idx, pts, props, color });
+        network.lineFeatures.push({ idx, pts, color, props });
       }
     });
 
-    state.dps = state.labels.filter(x => labelTypeName(x.name) === 'dp');
-    state.fdcs = state.labels.filter(x => labelTypeName(x.name) === 'fdc');
-    state.joints = state.labels.filter(x => labelTypeName(x.name) === 'jt');
-    state.fds = state.labels.filter(x => labelTypeName(x.name) === 'fd');
-    state.defaultFdc = state.fdcs.find(x => x.name.toUpperCase() === DEFAULT_FDC.toUpperCase()) || state.fdcs[0] || null;
+    network.dps = network.labels.filter(x => labelTypeName(x.name) === 'dp');
+    network.fdcs = network.labels.filter(x => labelTypeName(x.name) === 'fdc');
+    network.joints = network.labels.filter(x => labelTypeName(x.name) === 'jt');
+    network.fds = network.labels.filter(x => labelTypeName(x.name) === 'fd');
+    network.targetFdc = network.fdcs.find(x => x.name.toUpperCase() === network.fdcName.toUpperCase()) || null;
 
-    lineFeatures.forEach(({ idx, pts, color }) => {
+    network.lineFeatures.forEach(({ idx, pts, color }) => {
       for (let i = 0; i < pts.length - 1; i++) {
         addEdge(pts[i], pts[i + 1], xyDistance(pts[i], pts[i + 1]), { color, feature: idx, snap: false });
       }
@@ -165,137 +201,74 @@
       }
     });
 
+    const connectionLabelNear = (a, b, tolerance) => {
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      return network.labels.some(label => labelTypeName(label.name) && xyDistance(label.xy, mid) <= tolerance);
+    };
+
     for (let i = 0; i < endpoints.length; i++) {
       for (let j = i + 1; j < endpoints.length; j++) {
         const a = endpoints[i], b = endpoints[j];
-        const d = xyDistance(a.xy, b.xy);
-        if (!(d > 0 && d <= SNAP_METERS)) continue;
+        const distance = xyDistance(a.xy, b.xy);
+        if (!(distance > 0 && distance <= SNAP_METERS)) continue;
         const sameColour = a.color === b.color;
         const namedConnection = connectionLabelNear(a.xy, b.xy, 12);
         if (sameColour || namedConnection) {
-          addEdge(a.xy, b.xy, d, { color: 'SNAP', feature: null, snap: true });
+          addEdge(a.xy, b.xy, distance, { color:'SNAP', feature:null, snap:true });
         }
       }
     }
 
-    drawSourceRoutes(lineFeatures);
-    drawNodes();
-    state.topologyReport = validateTopology();
-    console.table(state.topologyReport.rows);
+    return network;
   }
 
-  function connectionLabelNear(a, b, tolerance) {
-    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    return state.labels.some(label => labelTypeName(label.name) && xyDistance(label.xy, mid) <= tolerance);
-  }
-
-  function drawSourceRoutes(lines) {
-    state.sourceRouteLayer.clearLayers();
-    const allLatLngs = [];
-    lines.forEach(({ pts, color }) => {
-      const latlngs = pts.map(p => {
-        const [lng, lat] = toLngLat(p);
-        allLatLngs.push([lat, lng]);
-        return [lat, lng];
-      });
-      const displayColor = color === '#FF0000' ? '#ff3b30' : color === '#0000FF' ? '#2563eb' : color;
-      L.polyline(latlngs, { color:'#ffffff', weight:5.2, opacity:.24, interactive:false }).addTo(state.sourceRouteLayer);
-      L.polyline(latlngs, { color:displayColor, weight:3.0, opacity:.88, interactive:false }).addTo(state.sourceRouteLayer);
-    });
-    if (allLatLngs.length) map.fitBounds(L.latLngBounds(allLatLngs), { padding: [20, 20] });
-  }
-
-  function classify(label) {
-    return labelTypeName(label.name);
-  }
-
-  function tooltipClass(type, permanent = false) {
-    if (type === 'fd') return 'fd-label';
-    return permanent && type === 'dp' ? 'node-label dp-selected' : 'node-label';
-  }
-
-  function bindMarkerTooltip(entry, permanent = false) {
-    entry.marker.unbindTooltip();
-    entry.marker.bindTooltip(entry.label.name, {
-      permanent,
-      direction: permanent && entry.type === 'fd' ? 'right' : 'top',
-      offset: permanent && entry.type === 'fd' ? [10,0] : [0,-9],
-      className: tooltipClass(entry.type, permanent),
-      opacity: .98
-    });
-    if (permanent) entry.marker.openTooltip();
-  }
-
-  function drawNodes() {
-    state.markerLayer.clearLayers(); state.markerEntries.clear(); state.markersByName.clear();
-    state.labels.forEach(label => {
-      const type = classify(label);
-      if (!type) return;
-      const [lng, lat] = toLngLat(label.xy);
-      const marker = L.marker([lat, lng], { icon: nodeIcon(type), riseOnHover: true, keyboard: false }).addTo(state.markerLayer);
-      const entry = { marker, label, type };
-      state.markerEntries.set(label.id, entry);
-      bindMarkerTooltip(entry, false);
-
-      if (type === 'dp') marker.on('click', () => selectAndTrace(label.name, false));
-      if (type === 'fdc') marker.on('click', () => {
-        ui.destination.textContent = label.name;
-        ui.mapStatus.textContent = `FDC: ${label.name}`;
-      });
-      if (!state.markersByName.has(label.name.toUpperCase())) state.markersByName.set(label.name.toUpperCase(), marker);
-    });
-  }
-
-  function resetMarkerHighlights() {
-    state.markerEntries.forEach(entry => {
-      bindMarkerTooltip(entry, false);
-      if (entry.marker._icon) entry.marker._icon.querySelector('.node-marker')?.classList.remove('fd-active');
-    });
-  }
-
-  function nearestGraphKey(xy, max = 80) {
+  function nearestGraphKey(network, xy, max = 80) {
     let best = null, bestD = Infinity;
-    for (const [key, node] of state.nodeCoords.entries()) {
-      const d = xyDistance(xy, node);
-      if (d < bestD) { best = key; bestD = d; }
+    for (const [key, node] of network.nodeCoords.entries()) {
+      const distance = xyDistance(xy, node);
+      if (distance < bestD) { best = key; bestD = distance; }
     }
-    return bestD <= max ? { key: best, distance: bestD } : null;
+    return bestD <= max ? { key:best, distance:bestD } : null;
   }
 
-  function dijkstra(startKey, endKey) {
+  function dijkstra(network, startKey, endKey) {
     const dist = new Map([[startKey, 0]]);
     const prev = new Map();
     const visited = new Set();
-    const queue = [{ key: startKey, d: 0 }];
+    const queue = [{ key:startKey, d:0 }];
+
     while (queue.length) {
       queue.sort((a,b) => a.d - b.d);
       const cur = queue.shift();
       if (visited.has(cur.key)) continue;
       visited.add(cur.key);
       if (cur.key === endKey) break;
-      for (const edge of state.graph.get(cur.key) || []) {
+
+      for (const edge of network.graph.get(cur.key) || []) {
         if (visited.has(edge.to)) continue;
         const nd = cur.d + edge.weight;
         if (nd < (dist.get(edge.to) ?? Infinity)) {
           dist.set(edge.to, nd);
-          prev.set(edge.to, { from: cur.key, edge });
-          queue.push({ key: edge.to, d: nd });
+          prev.set(edge.to, { from:cur.key, edge });
+          queue.push({ key:edge.to, d:nd });
         }
       }
     }
+
     if (!dist.has(endKey)) return null;
     const keys = [], edges = [];
-    let k = endKey;
-    while (k) {
-      keys.push(k);
-      if (k === startKey) break;
-      const p = prev.get(k);
+    let key = endKey;
+    while (key) {
+      keys.push(key);
+      if (key === startKey) break;
+      const p = prev.get(key);
       if (!p) return null;
       edges.push(p.edge);
-      k = p.from;
+      key = p.from;
     }
-    keys.reverse(); edges.reverse();
-    return { keys, edges, distance: dist.get(endKey) };
+    keys.reverse();
+    edges.reverse();
+    return { keys, edges, distance:dist.get(endKey) };
   }
 
   function pointSegmentDistance(p, a, b) {
@@ -309,50 +282,185 @@
 
   function distanceToPolyline(p, coords) {
     let best = Infinity;
-    for (let i = 0; i < coords.length - 1; i++) best = Math.min(best, pointSegmentDistance(p, coords[i], coords[i + 1]));
+    for (let i = 0; i < coords.length - 1; i++) {
+      best = Math.min(best, pointSegmentDistance(p, coords[i], coords[i + 1]));
+    }
     return best;
   }
 
-  function findFdCablesAlongRoute(coords) {
-    return state.fds.filter(fd => distanceToPolyline(fd.xy, coords) <= FD_ROUTE_TOLERANCE_METERS);
+  function findFdCablesAlongRoute(network, coords) {
+    return network.fds.filter(fd => distanceToPolyline(fd.xy, coords) <= FD_ROUTE_TOLERANCE_METERS);
   }
 
-  function findRoute(dp, fdc) {
-    const s = nearestGraphKey(dp.xy), e = nearestGraphKey(fdc.xy);
-    if (!s || !e) return null;
-    const result = dijkstra(s.key, e.key);
+  function findRoute(dp, network = state.networks.get(dp.networkId)) {
+    if (!network?.targetFdc) return null;
+    const start = nearestGraphKey(network, dp.xy);
+    const end = nearestGraphKey(network, network.targetFdc.xy);
+    if (!start || !end) return null;
+
+    const result = dijkstra(network, start.key, end.key);
     if (!result) return null;
-    const coords = result.keys.map(k => state.nodeCoords.get(k));
+
+    const coords = result.keys.map(key => network.nodeCoords.get(key));
     if (xyDistance(dp.xy, coords[0]) > .01) coords.unshift(dp.xy);
-    if (xyDistance(fdc.xy, coords[coords.length - 1]) > .01) coords.push(fdc.xy);
-    const distance = result.distance + s.distance + e.distance;
+    if (xyDistance(network.targetFdc.xy, coords[coords.length - 1]) > .01) coords.push(network.targetFdc.xy);
+
+    const distance = result.distance + start.distance + end.distance;
     const latlngs = coords.map(p => {
       const [lng, lat] = toLngLat(p);
       return L.latLng(lat, lng);
     });
-    const fdLabels = findFdCablesAlongRoute(coords);
-    return { coords, latlngs, distance, edges: result.edges, fdLabels };
+    const fdLabels = findFdCablesAlongRoute(network, coords);
+
+    return {
+      networkId: network.id,
+      destination: network.targetFdc,
+      coords,
+      latlngs,
+      distance,
+      edges: result.edges,
+      fdLabels
+    };
   }
 
-  function validateTopology() {
-    if (!state.defaultFdc) return { connected:0, total:state.dps.length, rows:[] };
-    const rows = state.dps
+  function validateNetwork(network) {
+    const rows = network.dps
       .slice()
       .sort((a,b) => a.name.localeCompare(b.name, undefined, { numeric:true }))
       .map(dp => {
-        const route = findRoute(dp, state.defaultFdc);
+        const route = findRoute(dp, network);
         return {
+          Network: network.id,
           DP: dp.name,
           Connected: Boolean(route),
           'Distance km': route ? Number((route.distance / 1000).toFixed(3)) : null,
           'FD Cable': route ? [...new Set(route.fdLabels.map(x => x.name))].join(' / ') : ''
         };
       });
-    return { connected: rows.filter(r => r.Connected).length, total: rows.length, rows };
+
+    network.report = {
+      connected: rows.filter(row => row.Connected).length,
+      total: rows.length,
+      rows
+    };
+    return network.report;
+  }
+
+  function drawSourceRoutes() {
+    state.sourceRouteLayer.clearLayers();
+    const allLatLngs = [];
+    const seen = new Set();
+
+    state.networks.forEach(network => {
+      network.lineFeatures.forEach(({ pts, color }) => {
+        const geometryKey = color + '|' + pts.map(p => coordKey(p)).join(';');
+        if (seen.has(geometryKey)) return;
+        seen.add(geometryKey);
+
+        const latlngs = pts.map(p => {
+          const [lng, lat] = toLngLat(p);
+          allLatLngs.push([lat, lng]);
+          return [lat, lng];
+        });
+
+        const displayColor = color === '#FF0000' ? '#ff3b30' : color === '#0000FF' ? '#2563eb' : color;
+        L.polyline(latlngs, { color:'#ffffff', weight:5.2, opacity:.22, interactive:false }).addTo(state.sourceRouteLayer);
+        L.polyline(latlngs, { color:displayColor, weight:3, opacity:.83, interactive:false }).addTo(state.sourceRouteLayer);
+      });
+    });
+
+    if (allLatLngs.length) {
+      map.fitBounds(L.latLngBounds(allLatLngs), { padding:[20,20] });
+    }
+  }
+
+  function markerDedupKey(label, type) {
+    return `${type}|${label.name.toUpperCase()}|${coordKey(label.xy)}`;
+  }
+
+  function tooltipClass(type, permanent = false) {
+    if (type === 'fd') return 'fd-label';
+    return permanent && type === 'dp' ? 'node-label dp-selected' : 'node-label';
+  }
+
+  function bindMarkerTooltip(entry, permanent = false) {
+    entry.marker.unbindTooltip();
+    const suffix = entry.type === 'dp' ? ` · ${entry.label.networkId}` : '';
+    entry.marker.bindTooltip(entry.label.name + suffix, {
+      permanent,
+      direction: permanent && entry.type === 'fd' ? 'right' : 'top',
+      offset: permanent && entry.type === 'fd' ? [10,0] : [0,-9],
+      className: tooltipClass(entry.type, permanent),
+      opacity:.98
+    });
+    if (permanent) entry.marker.openTooltip();
+  }
+
+  function drawNodes() {
+    state.markerLayer.clearLayers();
+    state.markerEntries.clear();
+    state.markerDedup.clear();
+
+    state.networks.forEach(network => {
+      network.labels.forEach(label => {
+        const type = labelTypeName(label.name);
+        if (!type) return;
+
+        const dedupKey = markerDedupKey(label, type);
+        if (state.markerDedup.has(dedupKey) && type !== 'dp') return;
+        state.markerDedup.add(dedupKey);
+
+        const [lng, lat] = toLngLat(label.xy);
+        const marker = L.marker([lat,lng], {
+          icon:nodeIcon(type),
+          riseOnHover:true,
+          keyboard:false
+        }).addTo(state.markerLayer);
+
+        const entry = { marker, label, type };
+        state.markerEntries.set(label.id, entry);
+        bindMarkerTooltip(entry, false);
+
+        if (type === 'dp') {
+          marker.on('click', () => selectAndTrace(label, false));
+        } else if (type === 'fdc') {
+          marker.on('click', () => {
+            ui.destination.textContent = label.name;
+            ui.mapStatus.textContent = `FDC: ${label.name}`;
+          });
+        }
+      });
+    });
+  }
+
+  function resetMarkerHighlights() {
+    state.markerEntries.forEach(entry => {
+      bindMarkerTooltip(entry, false);
+      if (entry.marker._icon) {
+        entry.marker._icon.querySelector('.node-marker')?.classList.remove('fd-active');
+      }
+    });
+  }
+
+  function highlightRouteMarkers(route, dp) {
+    resetMarkerHighlights();
+
+    const dpEntry = state.markerEntries.get(dp.id);
+    if (dpEntry) bindMarkerTooltip(dpEntry, true);
+
+    route.fdLabels.forEach(fd => {
+      const entry = state.markerEntries.get(fd.id);
+      if (!entry) return;
+      bindMarkerTooltip(entry, true);
+      if (entry.marker._icon) {
+        entry.marker._icon.querySelector('.node-marker')?.classList.add('fd-active');
+      }
+    });
   }
 
   function bearing(a, b) {
-    const p1 = a.lat * Math.PI / 180, p2 = b.lat * Math.PI / 180;
+    const p1 = a.lat * Math.PI / 180;
+    const p2 = b.lat * Math.PI / 180;
     const dl = (b.lng - a.lng) * Math.PI / 180;
     const y = Math.sin(dl) * Math.cos(p2);
     const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
@@ -360,10 +468,12 @@
   }
 
   function routeMetric(latlngs) {
-    const segs = []; let total = 0;
+    const segs = [];
+    let total = 0;
     for (let i = 0; i < latlngs.length - 1; i++) {
-      const d = map.distance(latlngs[i], latlngs[i + 1]);
-      segs.push(d); total += d;
+      const distance = map.distance(latlngs[i], latlngs[i + 1]);
+      segs.push(distance);
+      total += distance;
     }
     return { segs, total };
   }
@@ -371,15 +481,15 @@
   function pointAtDistance(latlngs, metric, target) {
     let acc = 0;
     for (let i = 0; i < metric.segs.length; i++) {
-      const d = metric.segs[i];
-      if (acc + d >= target || i === metric.segs.length - 1) {
-        const t = d === 0 ? 0 : Math.min(1, Math.max(0, (target - acc) / d));
+      const distance = metric.segs[i];
+      if (acc + distance >= target || i === metric.segs.length - 1) {
+        const t = distance === 0 ? 0 : Math.min(1, Math.max(0, (target - acc) / distance));
         return L.latLng(
           latlngs[i].lat + (latlngs[i + 1].lat - latlngs[i].lat) * t,
           latlngs[i].lng + (latlngs[i + 1].lng - latlngs[i].lng) * t
         );
       }
-      acc += d;
+      acc += distance;
     }
     return latlngs[latlngs.length - 1];
   }
@@ -387,30 +497,20 @@
   function renderDirectionArrows(latlngs) {
     state.directionLayer.clearLayers();
     const metric = routeMetric(latlngs);
-    const fractions = metric.total < 500 ? [.28, .58, .82] : [.14, .32, .50, .68, .86];
+    const fractions = metric.total < 500 ? [.28,.58,.82] : [.14,.32,.50,.68,.86];
+
     fractions.forEach(frac => {
-      const d = metric.total * frac;
-      const p = pointAtDistance(latlngs, metric, d);
-      const p2 = pointAtDistance(latlngs, metric, Math.min(metric.total, d + Math.max(8, metric.total * .015)));
+      const distance = metric.total * frac;
+      const p = pointAtDistance(latlngs, metric, distance);
+      const p2 = pointAtDistance(latlngs, metric, Math.min(metric.total, distance + Math.max(8, metric.total * .015)));
       const deg = bearing(p, p2);
       const icon = L.divIcon({
-        className: '',
-        html: `<div class="route-arrow-wrap"><div class="route-arrow" style="transform:rotate(${deg}deg)">➤</div></div>`,
-        iconSize:[22,22], iconAnchor:[11,11]
+        className:'',
+        html:`<div class="route-arrow-wrap"><div class="route-arrow" style="transform:rotate(${deg}deg)">➤</div></div>`,
+        iconSize:[22,22],
+        iconAnchor:[11,11]
       });
       L.marker(p, { icon, interactive:false, zIndexOffset:1200 }).addTo(state.directionLayer);
-    });
-  }
-
-  function highlightRouteMarkers(route, dp) {
-    resetMarkerHighlights();
-    const dpEntry = [...state.markerEntries.values()].find(e => e.type === 'dp' && e.label.name.toUpperCase() === dp.name.toUpperCase());
-    if (dpEntry) bindMarkerTooltip(dpEntry, true);
-    route.fdLabels.forEach(fd => {
-      const entry = state.markerEntries.get(fd.id);
-      if (!entry) return;
-      bindMarkerTooltip(entry, true);
-      if (entry.marker._icon) entry.marker._icon.querySelector('.node-marker')?.classList.add('fd-active');
     });
   }
 
@@ -420,168 +520,82 @@
     state.directionLayer.clearLayers();
   }
 
-  function populateFaultStarts() {
-    if (!ui.faultStartSelect) return;
-    const sorted = state.dps.slice().sort((a,b) => a.name.localeCompare(b.name, undefined, { numeric:true }));
-    ui.faultStartSelect.innerHTML = '<option value="">Select FDP/DP</option>' +
-      sorted.map(dp => `<option value="${escapeHtml(dp.name)}">${escapeHtml(dp.name)}</option>`).join('');
-  }
+  function selectAndTrace(dp, openMobilePanel = false) {
+    if (!dp) return showError('DP/FDP not found.');
+    const network = state.networks.get(dp.networkId);
+    if (!network?.targetFdc) return showError('FDC for this route is not registered.');
 
-  function syncFaultStart(name) {
-    if (!ui.faultStartSelect) return;
-    const match = state.dps.find(dp => dp.name.toUpperCase() === String(name || '').toUpperCase());
-    if (!match) return;
-    ui.faultStartSelect.value = match.name;
-    ui.faultSelectedStart.textContent = match.name;
-  }
-
-  function clearFaultLocator(clearForm = false) {
-    if (state.faultMarker) { state.faultMarker.remove(); state.faultMarker = null; }
-    if (state.faultSegmentLayer) { state.faultSegmentLayer.remove(); state.faultSegmentLayer = null; }
-    state.faultGps = null;
-    if (ui.faultResult) ui.faultResult.classList.add('hidden');
-    if (ui.faultStatus) {
-      ui.faultStatus.textContent = 'Ready';
-      ui.faultStatus.classList.remove('active');
-    }
-    if (clearForm && ui.faultDistanceInput) ui.faultDistanceInput.value = '';
-  }
-
-  function routePrefixAtDistance(latlngs, metric, target) {
-    const points = [latlngs[0]];
-    let acc = 0;
-    for (let i = 0; i < metric.segs.length; i++) {
-      const d = metric.segs[i];
-      if (acc + d >= target) {
-        points.push(pointAtDistance(latlngs, metric, target));
-        break;
-      }
-      points.push(latlngs[i + 1]);
-      acc += d;
-    }
-    return points;
-  }
-
-  function setFaultError(message) {
-    ui.faultStatus.textContent = 'Check input';
-    ui.faultStatus.classList.remove('active');
-    ui.mapStatus.textContent = message;
-    ui.faultResult.classList.add('hidden');
-  }
-
-  function locateOtdrFault() {
-    const startName = ui.faultStartSelect.value;
-    const distanceM = Number(ui.faultDistanceInput.value);
-    if (!startName) return setFaultError('Select a start FDP/DP.');
-    if (!Number.isFinite(distanceM) || distanceM <= 0) return setFaultError('Enter a valid OTDR fault distance in meter.');
-
-    const start = state.dps.find(dp => dp.name.toUpperCase() === startName.toUpperCase());
-    if (!start || !state.defaultFdc) return setFaultError('Selected FDP/DP is not registered in topology.');
-
-    // Reuse the same validated topology engine used by Fiber Trace.
-    selectAndTrace(start.name, false);
-    const route = state.activeRoute;
-    if (!route) return setFaultError('No registered fiber route found from this FDP/DP to FDC.');
-
-    if (distanceM > route.distance + 1) {
-      return setFaultError(`OTDR distance ${distanceM.toFixed(0)} m exceeds registered route ${route.distance.toFixed(0)} m to FDC.`);
-    }
-
-    clearFaultLocator(false);
-    const metric = routeMetric(route.latlngs);
-    const targetOnMap = metric.total * Math.min(1, distanceM / route.distance);
-    const point = pointAtDistance(route.latlngs, metric, targetOnMap);
-    const prefix = routePrefixAtDistance(route.latlngs, metric, targetOnMap);
-
-    state.faultSegmentLayer = L.polyline(prefix, {
-      color:'#dc2626', weight:6, opacity:.9, dashArray:'10 7',
-      lineCap:'round', lineJoin:'round', interactive:false
-    }).addTo(map);
-    state.faultSegmentLayer.bringToFront();
-
-    state.faultMarker = L.marker(point, {
-      icon:faultIcon, zIndexOffset:2600, riseOnHover:true
-    }).addTo(map);
-    state.faultMarker.bindTooltip(
-      `Suspected Cut • ${Math.round(distanceM)} m from ${start.name}`,
-      { permanent:true, direction:'top', offset:[0,-18], className:'fault-label', opacity:1 }
-    ).openTooltip();
-
-    state.faultGps = { lat: point.lat, lng: point.lng };
-    const balance = Math.max(0, route.distance - distanceM);
-    ui.faultGps.textContent = `${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
-    ui.faultFromStart.textContent = `${Math.round(distanceM)} m`;
-    ui.faultBalance.textContent = formatKm(balance);
-    ui.faultResult.classList.remove('hidden');
-    ui.faultStatus.textContent = 'Located';
-    ui.faultStatus.classList.add('active');
-    ui.mapStatus.textContent = `Suspected cut • ${Math.round(distanceM)} m from ${start.name} • GPS ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
-
-    map.setView(point, Math.max(map.getZoom(), 18), { animate:true });
-    if (window.innerWidth <= 760) {
-      ui.mobileTraceNode.textContent = `⚡ Suspected Cut • ${start.name}`;
-      ui.mobileTraceDistance.textContent = `${Math.round(distanceM)} m • ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
-      closeMobileSheet();
-    }
-  }
-
-  function selectAndTrace(name, openMobilePanel = false) {
     stopAnimation(false);
     clearFaultLocator(false);
-    const dp = state.dps.find(x => x.name.toUpperCase() === String(name).toUpperCase());
-    if (!dp || !state.defaultFdc) return showError('DP or FDC not found.');
-    const route = findRoute(dp, state.defaultFdc);
-    if (!route) return showError(`No connected route found for ${dp.name}.`);
 
-    state.selectedDp = dp; state.activeRoute = route; state.progress = 0;
+    const route = findRoute(dp, network);
+    if (!route) return showError(`No connected route found for ${dp.name} · ${network.id}.`);
+
+    state.selectedDp = dp;
+    state.selectedSearchDp = dp;
+    state.activeNetwork = network;
+    state.activeRoute = route;
+    state.progress = 0;
+
     if (state.mover) { state.mover.remove(); state.mover = null; }
     clearActiveRouteLayers();
 
     state.routeShadowLayer = L.polyline(route.latlngs, {
       color:'#1f2937', weight:11, opacity:.72, lineCap:'round', lineJoin:'round', interactive:false
     }).addTo(map);
+
     state.routeLayer = L.polyline(route.latlngs, {
       color:'#ffd800', weight:6.5, opacity:1, lineCap:'round', lineJoin:'round', interactive:false
     }).addTo(map);
-    state.routeShadowLayer.bringToFront(); state.routeLayer.bringToFront();
+
+    state.routeShadowLayer.bringToFront();
+    state.routeLayer.bringToFront();
     renderDirectionArrows(route.latlngs);
     highlightRouteMarkers(route, dp);
 
     map.fitBounds(state.routeLayer.getBounds(), { padding:[42,42], maxZoom:18, animate:true });
     updateTraceUI(0);
-    ui.traceStatus.textContent = 'Ready'; ui.traceStatus.classList.add('active');
-    ui.mapStatus.textContent = `${dp.name} → ${state.defaultFdc.name} • ${(route.distance / 1000).toFixed(3)} km`;
-    ui.playBtn.disabled = false; ui.resetBtn.disabled = false; ui.mobilePlayBtn.disabled = false;
+
+    ui.traceStatus.textContent = 'Ready';
+    ui.traceStatus.classList.add('active');
+    ui.mapStatus.textContent = `${dp.name} · ${network.id} → ${network.targetFdc.name} • ${(route.distance/1000).toFixed(3)} km`;
+    ui.playBtn.disabled = false;
+    ui.resetBtn.disabled = false;
+    ui.mobilePlayBtn.disabled = false;
     ui.searchInput.value = dp.name;
-    syncFaultStart(dp.name);
+    syncFaultStart(dp);
     syncPlayButtons('ready');
+
     if (window.innerWidth <= 760 && !openMobilePanel) {
       ui.detailsPanel.classList.remove('open');
       setMobileNavActive(ui.mobileDashboardBtn);
     }
-    if (openMobilePanel && window.innerWidth <= 760) ui.detailsPanel.classList.add('open');
+    if (openMobilePanel && window.innerWidth <= 760) openMobileSheet('details');
   }
 
-  function showError(msg) {
-    ui.mapStatus.textContent = msg;
-    ui.traceStatus.textContent = 'No route'; ui.traceStatus.classList.remove('active');
+  function showError(message) {
+    ui.mapStatus.textContent = message;
+    ui.traceStatus.textContent = 'No route';
+    ui.traceStatus.classList.remove('active');
   }
 
   function formatKm(m) {
-    return `${(Math.max(0, m) / 1000).toFixed(3)} km`;
+    return `${(Math.max(0,m)/1000).toFixed(3)} km`;
   }
 
   function updateTraceUI(covered) {
-    if (!state.activeRoute || !state.selectedDp) return;
+    if (!state.activeRoute || !state.selectedDp || !state.activeNetwork) return;
     const total = state.activeRoute.distance;
     const fdNames = [...new Set(state.activeRoute.fdLabels.map(x => x.name))];
-    ui.selectedNode.textContent = state.selectedDp.name;
-    ui.destination.textContent = state.defaultFdc?.name || '—';
+
+    ui.selectedNode.textContent = `${state.selectedDp.name} · ${state.activeNetwork.id}`;
+    ui.destination.textContent = state.activeNetwork.targetFdc?.name || '—';
     ui.totalDistance.textContent = formatKm(total);
     ui.coveredDistance.textContent = formatKm(covered);
     ui.balanceDistance.textContent = formatKm(total - covered);
     ui.fdCablePath.textContent = fdNames.length ? fdNames.join(' / ') : '—';
-    ui.mobileTraceNode.textContent = `${state.selectedDp.name} → ${state.defaultFdc?.name || 'FDC'}`;
+
+    ui.mobileTraceNode.textContent = `${state.selectedDp.name} · ${state.activeNetwork.id} → ${state.activeNetwork.targetFdc?.name || 'FDC'}`;
     ui.mobileTraceDistance.textContent = `${formatKm(covered)} covered • ${formatKm(total - covered)} balance`;
   }
 
@@ -593,19 +607,30 @@
 
   function syncPlayButtons(mode) {
     if (mode === 'playing') {
-      ui.playText.textContent = 'Pause'; ui.playIcon.textContent = 'Ⅱ'; ui.mobilePlayBtn.textContent = 'Ⅱ';
+      ui.playText.textContent = 'Pause';
+      ui.playIcon.textContent = 'Ⅱ';
+      ui.mobilePlayBtn.textContent = 'Ⅱ';
     } else if (mode === 'completed') {
-      ui.playText.textContent = 'Replay Trace'; ui.playIcon.textContent = '↻'; ui.mobilePlayBtn.textContent = '↻';
+      ui.playText.textContent = 'Replay Trace';
+      ui.playIcon.textContent = '↻';
+      ui.mobilePlayBtn.textContent = '↻';
     } else if (mode === 'paused') {
-      ui.playText.textContent = 'Resume Trace'; ui.playIcon.textContent = '▶'; ui.mobilePlayBtn.textContent = '▶';
+      ui.playText.textContent = 'Resume Trace';
+      ui.playIcon.textContent = '▶';
+      ui.mobilePlayBtn.textContent = '▶';
     } else {
-      ui.playText.textContent = 'Play Trace'; ui.playIcon.textContent = '▶'; ui.mobilePlayBtn.textContent = '▶';
+      ui.playText.textContent = 'Play Trace';
+      ui.playIcon.textContent = '▶';
+      ui.mobilePlayBtn.textContent = '▶';
     }
   }
 
   function playTrace() {
     if (!state.activeRoute) return;
-    if (state.playing) { stopAnimation(true); return; }
+    if (state.playing) {
+      stopAnimation(true);
+      return;
+    }
 
     const latlngs = state.activeRoute.latlngs;
     const metric = routeMetric(latlngs);
@@ -616,36 +641,46 @@
     ui.traceStatus.textContent = 'Tracing';
     syncPlayButtons('playing');
 
-    if (!state.mover) state.mover = L.marker(latlngs[0], { icon:moverIcon, zIndexOffset:2000, interactive:false }).addTo(map);
-    let lastUi = 0;
+    if (!state.mover) {
+      state.mover = L.marker(latlngs[0], {
+        icon:moverIcon,
+        zIndexOffset:2000,
+        interactive:false
+      }).addTo(map);
+    }
 
+    let lastUi = 0;
     const tick = now => {
       if (!state.playing) return;
-      const p = Math.min(1, (now - startTime) / duration);
-      state.progress = p;
-      const actualCovered = state.activeRoute.distance * p;
-      const pt = pointAtDistance(latlngs, metric, metric.total * p);
-      state.mover.setLatLng(pt);
+      const progress = Math.min(1, (now - startTime) / duration);
+      state.progress = progress;
+
+      const actualCovered = state.activeRoute.distance * progress;
+      const point = pointAtDistance(latlngs, metric, metric.total * progress);
+      state.mover.setLatLng(point);
 
       if (now - lastUi > 90) {
         updateTraceUI(actualCovered);
-        ui.mapStatus.textContent = `${state.selectedDp.name} • ${formatKm(actualCovered)} covered • ${formatKm(state.activeRoute.distance - actualCovered)} balance`;
+        ui.mapStatus.textContent = `${state.selectedDp.name} · ${state.activeNetwork.id} • ${formatKm(actualCovered)} covered • ${formatKm(state.activeRoute.distance - actualCovered)} balance`;
         lastUi = now;
       }
+
       if (now - state.lastPan > 320) {
-        map.panTo(pt, { animate:true, duration:.25, easeLinearity:.35 });
+        map.panTo(point, { animate:true, duration:.25, easeLinearity:.35 });
         state.lastPan = now;
       }
-      if (p < 1) {
+
+      if (progress < 1) {
         state.animationId = requestAnimationFrame(tick);
       } else {
         state.playing = false;
         ui.traceStatus.textContent = 'Completed';
         updateTraceUI(state.activeRoute.distance);
         syncPlayButtons('completed');
-        ui.mapStatus.textContent = `${state.selectedDp.name} trace completed at ${state.defaultFdc.name}`;
+        ui.mapStatus.textContent = `${state.selectedDp.name} trace completed at ${state.activeNetwork.targetFdc.name}`;
       }
     };
+
     state.animationId = requestAnimationFrame(tick);
   }
 
@@ -653,56 +688,292 @@
     state.playing = false;
     if (state.animationId) cancelAnimationFrame(state.animationId);
     state.animationId = null;
-    if (updateButtons && state.activeRoute) syncPlayButtons(state.progress > 0 ? 'paused' : 'ready');
+    if (updateButtons && state.activeRoute) {
+      syncPlayButtons(state.progress > 0 ? 'paused' : 'ready');
+    }
   }
 
   function resetTrace() {
-    stopAnimation(false); state.progress = 0;
-    if (state.mover) { state.mover.remove(); state.mover = null; }
+    stopAnimation(false);
+    state.progress = 0;
+    if (state.mover) {
+      state.mover.remove();
+      state.mover = null;
+    }
     if (state.activeRoute) {
       updateTraceUI(0);
-      map.fitBounds(L.latLngBounds(state.activeRoute.latlngs), { padding:[42,42], maxZoom:18, animate:true });
-      ui.mapStatus.textContent = `${state.selectedDp.name} → ${state.defaultFdc.name} • ${formatKm(state.activeRoute.distance)}`;
+      map.fitBounds(L.latLngBounds(state.activeRoute.latlngs), {
+        padding:[42,42], maxZoom:18, animate:true
+      });
+      ui.mapStatus.textContent = `${state.selectedDp.name} · ${state.activeNetwork.id} → ${state.activeNetwork.targetFdc.name} • ${formatKm(state.activeRoute.distance)}`;
     }
     ui.traceStatus.textContent = 'Ready';
     syncPlayButtons('ready');
   }
 
+  function populateFaultStarts() {
+    const sorted = state.allDps
+      .slice()
+      .sort((a,b) => a.networkId.localeCompare(b.networkId) || a.name.localeCompare(b.name, undefined, { numeric:true }));
+
+    ui.faultStartSelect.innerHTML =
+      '<option value="">Select FDP/DP</option>' +
+      sorted.map(dp =>
+        `<option value="${escapeHtml(dp.id)}">${escapeHtml(dp.networkId)} · ${escapeHtml(dp.name)}</option>`
+      ).join('');
+  }
+
+  function syncFaultStart(dp) {
+    if (!dp) return;
+    ui.faultStartSelect.value = dp.id;
+    ui.faultSelectedStart.textContent = `${dp.networkId} · ${dp.name}`;
+  }
+
+  function clearFaultLocator(clearForm = false) {
+    if (state.faultMarker) {
+      state.faultMarker.remove();
+      state.faultMarker = null;
+    }
+    if (state.faultSegmentLayer) {
+      state.faultSegmentLayer.remove();
+      state.faultSegmentLayer = null;
+    }
+    state.faultGps = null;
+    ui.faultResult.classList.add('hidden');
+    ui.faultStatus.textContent = 'Ready';
+    ui.faultStatus.classList.remove('active');
+    if (clearForm) ui.faultDistanceInput.value = '';
+  }
+
+  function routePrefixAtDistance(latlngs, metric, target) {
+    const points = [latlngs[0]];
+    let acc = 0;
+
+    for (let i = 0; i < metric.segs.length; i++) {
+      const distance = metric.segs[i];
+      if (acc + distance >= target) {
+        points.push(pointAtDistance(latlngs, metric, target));
+        break;
+      }
+      points.push(latlngs[i + 1]);
+      acc += distance;
+    }
+    return points;
+  }
+
+  function setFaultError(message) {
+    ui.faultStatus.textContent = 'Check input';
+    ui.faultStatus.classList.remove('active');
+    ui.mapStatus.textContent = message;
+    ui.faultResult.classList.add('hidden');
+  }
+
+  function dpById(id) {
+    return state.allDps.find(dp => dp.id === id) || null;
+  }
+
+  function locateOtdrFault() {
+    const start = dpById(ui.faultStartSelect.value);
+    const distanceM = Number(ui.faultDistanceInput.value);
+
+    if (!start) return setFaultError('Select a start FDP/DP.');
+    if (!Number.isFinite(distanceM) || distanceM <= 0) {
+      return setFaultError('Enter a valid OTDR fault distance in meter.');
+    }
+
+    const network = state.networks.get(start.networkId);
+    if (!network?.targetFdc) return setFaultError('FDC for this FDP/DP is not registered.');
+
+    selectAndTrace(start, false);
+    const route = state.activeRoute;
+    if (!route) return setFaultError('No registered fiber route found from this FDP/DP to FDC.');
+
+    if (distanceM > route.distance + 1) {
+      return setFaultError(`OTDR distance ${distanceM.toFixed(0)} m exceeds registered route ${route.distance.toFixed(0)} m to FDC.`);
+    }
+
+    clearFaultLocator(false);
+
+    const metric = routeMetric(route.latlngs);
+    const targetOnMap = metric.total * Math.min(1, distanceM / route.distance);
+    const point = pointAtDistance(route.latlngs, metric, targetOnMap);
+    const prefix = routePrefixAtDistance(route.latlngs, metric, targetOnMap);
+
+    state.faultSegmentLayer = L.polyline(prefix, {
+      color:'#dc2626',
+      weight:6,
+      opacity:.9,
+      dashArray:'10 7',
+      lineCap:'round',
+      lineJoin:'round',
+      interactive:false
+    }).addTo(map);
+    state.faultSegmentLayer.bringToFront();
+
+    state.faultMarker = L.marker(point, {
+      icon:faultIcon,
+      zIndexOffset:2600,
+      riseOnHover:true
+    }).addTo(map);
+
+    state.faultMarker.bindTooltip(
+      `Suspected Cut • ${Math.round(distanceM)} m from ${start.name} · ${network.id}`,
+      { permanent:true, direction:'top', offset:[0,-18], className:'fault-label', opacity:1 }
+    ).openTooltip();
+
+    state.faultGps = { lat:point.lat, lng:point.lng };
+    const balance = Math.max(0, route.distance - distanceM);
+
+    ui.faultGps.textContent = `${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+    ui.faultFromStart.textContent = `${Math.round(distanceM)} m`;
+    ui.faultBalance.textContent = formatKm(balance);
+    ui.faultResult.classList.remove('hidden');
+    ui.faultStatus.textContent = 'Located';
+    ui.faultStatus.classList.add('active');
+    ui.mapStatus.textContent = `Suspected cut • ${Math.round(distanceM)} m from ${start.name} · ${network.id} • GPS ${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+
+    map.setView(point, Math.max(map.getZoom(), 18), { animate:true });
+
+    if (window.innerWidth <= 760) {
+      ui.mobileTraceNode.textContent = `⚡ Suspected Cut • ${start.name} · ${network.id}`;
+      ui.mobileTraceDistance.textContent = `${Math.round(distanceM)} m • ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+      closeMobileSheet();
+    }
+  }
+
   function searchItems(query) {
     const q = String(query || '').trim().toUpperCase();
     if (!q) return [];
-    return [...state.dps, ...state.fdcs].filter(x => x.name.toUpperCase().includes(q)).slice(0, 10);
+
+    const dps = state.allDps.filter(dp =>
+      dp.name.toUpperCase().includes(q) ||
+      `${dp.networkId} ${dp.name}`.toUpperCase().includes(q)
+    );
+
+    const targetFdcs = [...state.networks.values()]
+      .map(network => network.targetFdc)
+      .filter(Boolean)
+      .filter(fdc => fdc.name.toUpperCase().includes(q));
+
+    return [...dps, ...targetFdcs].slice(0, 14);
   }
 
   function renderSearchResults() {
     const items = searchItems(ui.searchInput.value);
     if (!items.length) {
-      ui.searchResults.classList.add('hidden'); ui.searchResults.innerHTML = ''; return;
+      ui.searchResults.classList.add('hidden');
+      ui.searchResults.innerHTML = '';
+      return;
     }
-    ui.searchResults.innerHTML = items.map(x =>
-      `<button type="button" data-name="${escapeHtml(x.name)}"><span>${escapeHtml(x.name)}</span><small>${labelTypeName(x.name) === 'dp' ? 'FDP/DP' : 'FDC'}</small></button>`
-    ).join('');
+
+    ui.searchResults.innerHTML = items.map(item => {
+      const type = labelTypeName(item.name);
+      const network = item.networkId || [...state.networks.values()].find(n => n.targetFdc?.id === item.id)?.id || '';
+      return `<button type="button" data-id="${escapeHtml(item.id)}" data-type="${type || ''}">
+        <span>${escapeHtml(item.name)}</span>
+        <small>${type === 'dp' ? escapeHtml(network) : 'FDC'}</small>
+      </button>`;
+    }).join('');
+
     ui.searchResults.classList.remove('hidden');
   }
 
   function escapeHtml(s) {
-    return String(s).replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[c]));
+    return String(s).replace(/[&<>'"]/g, c => ({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
+    }[c]));
+  }
+
+  function setMobileNavActive(button) {
+    [ui.mobileDashboardBtn, ui.mobileFaultBtn, ui.mobileDetailsBtn].forEach(btn => {
+      if (btn) btn.classList.toggle('active', btn === button);
+    });
+  }
+
+  function closeMobileSheet() {
+    ui.detailsPanel.classList.remove('open');
+    setMobileNavActive(ui.mobileDashboardBtn);
+    setTimeout(() => map.invalidateSize({ animate:false }), 250);
+  }
+
+  function openMobileSheet(mode = 'details') {
+    if (window.innerWidth > 760) return;
+    ui.detailsPanel.classList.add('open');
+
+    if (mode === 'fault') {
+      setMobileNavActive(ui.mobileFaultBtn);
+      ui.mobileSheetSubtitle.textContent = 'OTDR fault locator';
+      requestAnimationFrame(() => ui.otdrFaultCard?.scrollIntoView({ behavior:'smooth', block:'start' }));
+    } else {
+      setMobileNavActive(ui.mobileDetailsBtn);
+      ui.mobileSheetSubtitle.textContent = 'Trace details & playback';
+      ui.detailsPanel.scrollTo({ top:0, behavior:'smooth' });
+    }
+  }
+
+  function traceFromSearch() {
+    if (state.selectedSearchDp && ui.searchInput.value.trim().toUpperCase() === state.selectedSearchDp.name.toUpperCase()) {
+      selectAndTrace(state.selectedSearchDp, false);
+      return;
+    }
+
+    const q = ui.searchInput.value.trim().toUpperCase();
+    const exact = state.allDps.filter(dp => dp.name.toUpperCase() === q);
+
+    if (exact.length === 1) {
+      selectAndTrace(exact[0], false);
+    } else if (exact.length > 1) {
+      renderSearchResults();
+      showError(`${q} exists in multiple FDC routes. Select the C029M/C046M result.`);
+    } else {
+      const partial = state.allDps.filter(dp => dp.name.toUpperCase().includes(q));
+      if (partial.length === 1) selectAndTrace(partial[0], false);
+      else {
+        renderSearchResults();
+        showError('Select a DP/FDP from search results.');
+      }
+    }
   }
 
   function bindUI() {
-    ui.searchInput.addEventListener('input', renderSearchResults);
-    ui.searchInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); traceFromSearch(); }
+    ui.searchInput.addEventListener('input', () => {
+      state.selectedSearchDp = null;
+      renderSearchResults();
     });
-    ui.searchResults.addEventListener('click', e => {
-      const btn = e.target.closest('button[data-name]'); if (!btn) return;
-      ui.searchInput.value = btn.dataset.name;
-      ui.searchResults.classList.add('hidden');
-      if (/^(DP|FDP)/i.test(btn.dataset.name) || /_(DP|FDP)/i.test(btn.dataset.name)) selectAndTrace(btn.dataset.name, false);
+
+    ui.searchInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        traceFromSearch();
+      }
     });
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.search-box')) ui.searchResults.classList.add('hidden');
+
+    ui.searchResults.addEventListener('click', event => {
+      const button = event.target.closest('button[data-id]');
+      if (!button) return;
+
+      const dp = dpById(button.dataset.id);
+      if (dp) {
+        state.selectedSearchDp = dp;
+        ui.searchInput.value = dp.name;
+        ui.searchResults.classList.add('hidden');
+        selectAndTrace(dp, false);
+        return;
+      }
+
+      const fdc = state.allFdcs.find(item => item.id === button.dataset.id);
+      if (fdc) {
+        const [lng, lat] = toLngLat(fdc.xy);
+        map.setView([lat,lng], 18, { animate:true });
+        ui.searchInput.value = fdc.name;
+        ui.searchResults.classList.add('hidden');
+      }
     });
+
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.search-box')) ui.searchResults.classList.add('hidden');
+    });
+
     ui.traceBtn.addEventListener('click', traceFromSearch);
     ui.playBtn.addEventListener('click', playTrace);
     ui.mobilePlayBtn.addEventListener('click', playTrace);
@@ -710,41 +981,53 @@
     ui.mobileTraceInfo.addEventListener('click', () => openMobileSheet('details'));
 
     ui.faultStartSelect.addEventListener('change', () => {
-      const name = ui.faultStartSelect.value;
-      ui.faultSelectedStart.textContent = name || '—';
-      if (name) {
-        const dp = state.dps.find(x => x.name.toUpperCase() === name.toUpperCase());
-        if (dp) {
-          const route = findRoute(dp, state.defaultFdc);
-          if (route) ui.faultStatus.textContent = `${Math.round(route.distance)} m to FDC`;
-        }
+      const dp = dpById(ui.faultStartSelect.value);
+      ui.faultSelectedStart.textContent = dp ? `${dp.networkId} · ${dp.name}` : '—';
+      if (dp) {
+        const network = state.networks.get(dp.networkId);
+        const route = findRoute(dp, network);
+        if (route) ui.faultStatus.textContent = `${Math.round(route.distance)} m to ${network.id} FDC`;
+      } else {
+        ui.faultStatus.textContent = 'Ready';
       }
     });
+
     ui.locateFaultBtn.addEventListener('click', locateOtdrFault);
-    ui.faultDistanceInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); locateOtdrFault(); }
+    ui.faultDistanceInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        locateOtdrFault();
+      }
     });
+
     ui.faultGoogleMapsBtn.addEventListener('click', () => {
       if (!state.faultGps) return;
       const { lat, lng } = state.faultGps;
       window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank', 'noopener');
     });
 
-    ui.speedControl.addEventListener('click', e => {
-      const btn = e.target.closest('button[data-speed]'); if (!btn) return;
-      [...ui.speedControl.querySelectorAll('button')].forEach(x => x.classList.toggle('active', x === btn));
-      state.speed = btn.dataset.speed;
-      if (state.playing) { stopAnimation(false); playTrace(); }
+    ui.speedControl.addEventListener('click', event => {
+      const button = event.target.closest('button[data-speed]');
+      if (!button) return;
+      [...ui.speedControl.querySelectorAll('button')].forEach(x => x.classList.toggle('active', x === button));
+      state.speed = button.dataset.speed;
+      if (state.playing) {
+        stopAnimation(false);
+        playTrace();
+      }
     });
 
-    document.querySelector('.map-layer-toggle').addEventListener('click', e => {
-      const btn = e.target.closest('button[data-layer]'); if (!btn) return;
-      const next = btn.dataset.layer;
+    document.querySelector('.map-layer-toggle').addEventListener('click', event => {
+      const button = event.target.closest('button[data-layer]');
+      if (!button) return;
+      const next = button.dataset.layer;
       if (next === state.activeBaseLayer) return;
+
       map.removeLayer(state.baseLayers[state.activeBaseLayer]);
-      state.baseLayers[next].addTo(map); state.baseLayers[next].bringToBack();
+      state.baseLayers[next].addTo(map);
+      state.baseLayers[next].bringToBack();
       state.activeBaseLayer = next;
-      document.querySelectorAll('.map-layer-toggle button').forEach(x => x.classList.toggle('active', x === btn));
+      document.querySelectorAll('.map-layer-toggle button').forEach(x => x.classList.toggle('active', x === button));
     });
 
     ui.mobileDetailsBtn.addEventListener('click', () => {
@@ -756,63 +1039,56 @@
     ui.mobileSheetClose.addEventListener('click', closeMobileSheet);
   }
 
-  function setMobileNavActive(button) {
-    [ui.mobileDashboardBtn, ui.mobileFaultBtn, ui.mobileDetailsBtn].forEach(btn => {
-      if (btn) btn.classList.toggle('active', btn === button);
-    });
-  }
+  async function loadNetwork(config) {
+    const parts = await Promise.all(config.dataUrls.map(async url => {
+      const response = await fetch(`${url}?v=${Date.now()}`, { cache:'no-store' });
+      if (!response.ok) throw new Error(`${url} HTTP ${response.status}`);
+      return response.json();
+    }));
 
-  function closeMobileSheet() {
-    if (ui.detailsPanel) ui.detailsPanel.classList.remove('open');
-    setMobileNavActive(ui.mobileDashboardBtn);
-    setTimeout(() => map.invalidateSize({ animate:false }), 250);
-  }
+    const data = {
+      type:'FeatureCollection',
+      features:parts.flatMap(part => part.features || [])
+    };
 
-  function openMobileSheet(mode = 'details') {
-    if (window.innerWidth > 760) return;
-    ui.detailsPanel.classList.add('open');
-    if (mode === 'fault') {
-      setMobileNavActive(ui.mobileFaultBtn);
-      if (ui.mobileSheetSubtitle) ui.mobileSheetSubtitle.textContent = 'OTDR fault locator';
-      requestAnimationFrame(() => ui.otdrFaultCard?.scrollIntoView({ behavior:'smooth', block:'start' }));
-    } else {
-      setMobileNavActive(ui.mobileDetailsBtn);
-      if (ui.mobileSheetSubtitle) ui.mobileSheetSubtitle.textContent = 'Trace details & playback';
-      ui.detailsPanel.scrollTo({ top:0, behavior:'smooth' });
-    }
-  }
-
-  function traceFromSearch() {
-    const q = ui.searchInput.value.trim().toUpperCase();
-    const dp = state.dps.find(x => x.name.toUpperCase() === q) || state.dps.find(x => x.name.toUpperCase().includes(q));
-    if (dp) selectAndTrace(dp.name, false);
-    else showError('Select a DP from search results.');
+    const network = createNetwork(config, data);
+    validateNetwork(network);
+    return network;
   }
 
   async function init() {
     bindUI();
+
     try {
-      const parts = await Promise.all(DATA_URLS.map(async url => {
-        const res = await fetch(`${url}?v=${Date.now()}`, { cache:'no-store' });
-        if (!res.ok) throw new Error(`${url} HTTP ${res.status}`);
-        return res.json();
-      }));
-      state.geojson = { type:'FeatureCollection', features:parts.flatMap(p => p.features || []) };
-      buildTopology(state.geojson);
+      const networks = await Promise.all(NETWORK_CONFIGS.map(loadNetwork));
+      networks.forEach(network => state.networks.set(network.id, network));
+
+      state.allDps = networks.flatMap(network => network.dps);
+      state.allFdcs = networks.flatMap(network => network.fdcs);
+      state.allFds = networks.flatMap(network => network.fds);
+      state.topologyReports = networks.map(network => network.report);
+
+      drawSourceRoutes();
+      drawNodes();
       populateFaultStarts();
 
-      const report = state.topologyReport;
-      if (report && report.connected === report.total) {
-        ui.networkBadge.innerHTML = `<span class="status-dot"></span>Topology ${report.connected}/${report.total} Ready`;
-      } else {
-        ui.networkBadge.textContent = `Topology ${report?.connected || 0}/${report?.total || state.dps.length}`;
-      }
-      if (state.dps.length) ui.mapStatus.textContent = `${state.dps.length} DP loaded • Tap any DP to trace`;
+      const connected = state.topologyReports.reduce((sum, report) => sum + report.connected, 0);
+      const total = state.topologyReports.reduce((sum, report) => sum + report.total, 0);
 
-      const demo = state.dps.find(x => x.name.toUpperCase() === 'DP0008') || state.dps[0];
-      if (demo) setTimeout(() => selectAndTrace(demo.name, false), 400);
-    } catch (err) {
-      console.error(err);
+      if (connected === total) {
+        ui.networkBadge.innerHTML = `<span class="status-dot"></span>Topology ${connected}/${total} Ready`;
+      } else {
+        ui.networkBadge.textContent = `Topology ${connected}/${total}`;
+      }
+
+      ui.mapStatus.textContent = `${NETWORK_CONFIGS.length} FDC routes • ${total} DP loaded`;
+      console.table(state.topologyReports.flatMap(report => report.rows));
+
+      const demoNetwork = state.networks.get('C029M');
+      const demo = demoNetwork?.dps.find(dp => dp.name.toUpperCase() === 'DP0008') || state.allDps[0];
+      if (demo) setTimeout(() => selectAndTrace(demo, false), 400);
+    } catch (error) {
+      console.error(error);
       ui.networkBadge.textContent = 'Data Error';
       showError('Unable to load fiber topology data.');
     }
@@ -826,5 +1102,6 @@
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
   }
+
   init();
 })();
